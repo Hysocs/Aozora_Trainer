@@ -1802,9 +1802,8 @@ class LiveMetricsWidget(QtWidgets.QWidget):
         self.pause_btn.setCheckable(True)
         self.pause_btn.toggled.connect(self._on_pause_toggled)
         self.stats_label = make_label("No data yet", color=ACCENT2, bold=True)
-        for w in [self.clear_btn, self.pause_btn, None, self.stats_label]:
+        for w in [self.stats_label, None, self.pause_btn, self.clear_btn]:
             (ctrl.addStretch() if w is None else ctrl.addWidget(w))
-        main.addLayout(ctrl)
 
         grid = QtWidgets.QGridLayout()
         grid.setSpacing(10)
@@ -1818,6 +1817,7 @@ class LiveMetricsWidget(QtWidgets.QWidget):
         ]:
             grid.addWidget(self._make_graph_container(name, title, y_label), row, col, row_span, col_span)
         main.addLayout(grid)
+        main.addLayout(ctrl)
 
         for graph_name, line_name, color, width, line_style in [
             ("step_loss", "Step Loss", ACCENT2, 2, "solid"),
