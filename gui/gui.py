@@ -3520,6 +3520,11 @@ UI_DEFS = {
     "TIMESTEP_FORCE_IMAGE_BIN_SPREAD": ("Force Image-Bin Spread", "Preplan batch-1 image order so images avoid repeating recent timestep bins while timestep sampling stays unchanged.", "check"),
     "MEMORY_EFFICIENT_ATTENTION":  ("Attention Backend", "Select the attention mechanism to use.", "combo", ["sdpa", "cudnn", "xformers (Only if no Flash)", "pytorch29_optimized"]),
     "LOSS_TYPE":                   ("Loss Type", "Select the loss function strategy.", "combo", ["MSE"]),
+    "ANIMA_SEMANTIC_LOSS_ENABLED": (
+        "Use Semantic Detail Loss (Experimental)",
+        "Pre-cache a detail mask per image and multiply Anima's spatial flow-matching loss by 1.0x to 2.0x before applying timestep loss weighting.",
+        "check",
+    ),
     "VAE_NORMALIZATION_MODE":      ("VAE Normalization", "scalar uses shift/scale, flux_bn32 uses the ComfyUI Flux 32ch BN layout.", "combo", ["scalar", "flux_bn32 (Comfy Flux BN)"]),
     "VAE_SHIFT_FACTOR":            ("VAE Shift Factor", "Latent shift mean.", "dspin", -10.0, 10.0, 0.0001, 4),
     "VAE_SCALING_FACTOR":          ("VAE Scaling Factor", "Latent scaling factor.", "dspin", 0.0, 10.0, 0.0001, 5),
@@ -4173,6 +4178,7 @@ class TrainingGUI(QtWidgets.QWidget):
             self._set_widget_row_visible("T5_TOKEN_DROPOUT_ENABLED", is_dit)
             self._update_t5_token_dropout_controls()
         self._set_widget_row_visible("ANIMA_GRADIENT_CHECKPOINTING_MODE", is_dit)
+        self._set_widget_row_visible("ANIMA_SEMANTIC_LOSS_ENABLED", is_dit)
         if not is_dit:
             self._update_vae_normalization_controls()
         if hasattr(self, "dataset_manager"):
@@ -5147,7 +5153,7 @@ class TrainingGUI(QtWidgets.QWidget):
         settings_group, settings_lay = group_box("Loss Settings")
         loss_form = QtWidgets.QFormLayout()
         loss_form.setContentsMargins(0, 0, 0, 0)
-        self._add_form_keys(loss_form, ["LOSS_TYPE"])
+        self._add_form_keys(loss_form, ["LOSS_TYPE", "ANIMA_SEMANTIC_LOSS_ENABLED"])
         settings_lay.addLayout(loss_form)
         settings_group.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Preferred,
@@ -5921,7 +5927,14 @@ class TrainingGUI(QtWidgets.QWidget):
 
     def get_current_cache_folder_names(self):
         if self._is_dit_mode():
-            return [self.current_config.get("ANIMA_CACHE_FOLDER_NAME", ".precomputed_anima_dit_cache")]
+            names = [
+                self.current_config.get(
+                    "ANIMA_CACHE_FOLDER_NAME", ".precomputed_anima_dit_cache"
+                )
+            ]
+            if bool(self.current_config.get("ANIMA_SEMANTIC_LOSS_ENABLED", False)):
+                names.append(".precomputed_anima_semantic_cache")
+            return names
         pred_type = self.widgets["PREDICTION_TYPE"].currentText() if "PREDICTION_TYPE" in self.widgets else ""
         if pred_type == "rectified_flow":
             return [".precomputed_embeddings_cache_rf"]

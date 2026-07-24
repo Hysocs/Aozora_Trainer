@@ -48,6 +48,7 @@ from training_utils.caching.cache import (
     strip_json_caption_suffix,
     text_cache_paths_for_index_item,
 )
+from scripts.semantic import generate_lineart_loss_map
 
 from train import (
     AsyncReporter,
@@ -84,6 +85,8 @@ from train import (
 
 AnimaImagePipeline = None
 ModelConfig = None
+ANIMA_SEMANTIC_MASK_VERSION = 1
+ANIMA_SEMANTIC_CACHE_FOLDER = ".precomputed_anima_semantic_cache"
 
 
 def configure_console_output():
@@ -300,6 +303,10 @@ def get_anima_cache_options(config):
         "vae_caching_tiled": bool(getattr(config, "VAE_CACHING_TILED", True)),
         "vae_caching_tile_size": list(getattr(config, "VAE_CACHING_TILE_SIZE", [96, 96])),
         "vae_caching_tile_stride": list(getattr(config, "VAE_CACHING_TILE_STRIDE", [72, 72])),
+        "anima_semantic_loss_enabled": bool(
+            getattr(config, "ANIMA_SEMANTIC_LOSS_ENABLED", False)
+        ),
+        "anima_semantic_mask_version": ANIMA_SEMANTIC_MASK_VERSION,
     }
 
 
@@ -793,10 +800,103 @@ def ensure_anima_null_conditioning_cache(config, pipe, device):
         torch.cuda.empty_cache()
 
 
+def anima_semantic_path_for_latent(lat_path):
+    lat_path = Path(lat_path)
+    stem = re.sub(r"_lat$", "", lat_path.stem)
+    return lat_path.parent.parent / ANIMA_SEMANTIC_CACHE_FOLDER / f"{stem}_semantic.pt"
+
+
+def ensure_anima_semantic_cache(config):
+    """Build the optional semantic masks independently of VAE/text caches."""
+    if not bool(getattr(config, "ANIMA_SEMANTIC_LOSS_ENABLED", False)):
+        return
+
+    cache_name = anima_cache_folder_name(config)
+    for root in anima_dataset_roots(config):
+        main_cache_dir = root / cache_name
+        if not cache_index_exists(main_cache_dir):
+            raise FileNotFoundError(
+                f"Cannot build semantic cache before the Anima cache index exists: {main_cache_dir}"
+            )
+        main_index = load_cache_index(main_cache_dir)
+        semantic_dir = root / ANIMA_SEMANTIC_CACHE_FOLDER
+        semantic_dir.mkdir(parents=True, exist_ok=True)
+        jobs = []
+        semantic_items = []
+        for item in main_index.get("files", []):
+            semantic_path = anima_semantic_path_for_latent(item["lat_path"])
+            image_path = root / item["relative_path"]
+            expected_signature = image_file_signature(image_path)
+            valid = False
+            if semantic_path.exists():
+                try:
+                    payload = torch.load(semantic_path, map_location="cpu", weights_only=True)
+                    mask = payload.get("semantic_mask")
+                    valid = (
+                        mask is not None
+                        and mask.ndim == 3
+                        and mask.shape[0] == 1
+                        and tuple(mask.shape[-2:]) == (
+                            int(item["target_size"][1]) // 8,
+                            int(item["target_size"][0]) // 8,
+                        )
+                        and int(payload.get("semantic_mask_version", 0))
+                        == ANIMA_SEMANTIC_MASK_VERSION
+                        and payload.get("image_file_signature") == expected_signature
+                        and bool(torch.isfinite(mask).all().item())
+                    )
+                except Exception:
+                    valid = False
+            if not valid:
+                jobs.append((item, image_path, semantic_path, expected_signature))
+            semantic_items.append(
+                {
+                    "semantic_path": str(semantic_path),
+                    "relative_path": item["relative_path"],
+                    "target_size": tuple(item["target_size"]),
+                }
+            )
+
+        print(
+            f"INFO: Anima semantic cache for {root.name}: "
+            f"{len(semantic_items) - len(jobs)}/{len(semantic_items)} reusable, "
+            f"{len(jobs)} to build."
+        )
+        with tqdm(total=len(jobs), desc=f"Caching Anima semantics {root.name}", unit="item") as pbar:
+            for item, image_path, semantic_path, signature in jobs:
+                target_w, target_h = item["target_size"]
+                with Image.open(image_path) as loaded:
+                    image = smart_resize(fix_alpha_channel(loaded), target_w, target_h)
+                mask = generate_lineart_loss_map(
+                    image,
+                    int(target_h) // 8,
+                    int(target_w) // 8,
+                )
+                torch.save(
+                    {
+                        "semantic_mask": mask,
+                        "semantic_mask_version": ANIMA_SEMANTIC_MASK_VERSION,
+                        "image_file_signature": signature,
+                        "relative_path": item["relative_path"],
+                        "target_size": tuple(item["target_size"]),
+                    },
+                    semantic_path,
+                )
+                pbar.update(1)
+        save_cache_index(
+            semantic_dir,
+            {
+                "version": ANIMA_SEMANTIC_MASK_VERSION,
+                "files": semantic_items,
+            },
+        )
+
+
 def precompute_and_cache_anima(config, pipe, device):
     roots_to_rebuild = anima_roots_needing_cache_rebuild(config)
     if not roots_to_rebuild:
         ensure_anima_null_conditioning_cache(config, pipe, device)
+        ensure_anima_semantic_cache(config)
         print("\n" + "=" * 60 + "\nINFO: Anima DiT datasets already cached.\n" + "=" * 60 + "\n")
         return
 
@@ -1143,6 +1243,7 @@ def precompute_and_cache_anima(config, pipe, device):
         print(f"INFO: Cached {len(valid_index_data)} Anima DiT items to {cache_dir}")
 
     ensure_anima_null_conditioning_cache(config, pipe, device)
+    ensure_anima_semantic_cache(config)
 
 
 class AnimaCachedDataset(Dataset):
@@ -1153,6 +1254,9 @@ class AnimaCachedDataset(Dataset):
         self.items = []
         self.bucket_keys = []
         self.seed = config.SEED if config.SEED else 42
+        self.semantic_loss_enabled = bool(
+            getattr(config, "ANIMA_SEMANTIC_LOSS_ENABLED", False)
+        )
         self.json_caption_mode = json_caption_mode_enabled(config)
         self.caption_weights = get_json_caption_weights(config)
         cache_name = anima_cache_folder_name(config)
@@ -1301,6 +1405,15 @@ class AnimaCachedDataset(Dataset):
                 return None
             item_data = {
                 "latents": latents,
+                "semantic_mask": (
+                    torch.load(
+                        anima_semantic_path_for_latent(lat_path),
+                        map_location="cpu",
+                        weights_only=True,
+                    )["semantic_mask"]
+                    if self.semantic_loss_enabled
+                    else None
+                ),
                 "prompt_emb": data_te["prompt_emb"],
                 "t5xxl_ids": data_te["t5xxl_ids"],
                 "target_size": item["target_size"],
@@ -1354,6 +1467,11 @@ def anima_collate_fn(batch):
         "target_size": [item["target_size"] for item in batch],
         "latent_path": [item["latent_path"] for item in batch],
         "image_key": [item["image_key"] for item in batch],
+        "semantic_mask": (
+            torch.stack([item["semantic_mask"] for item in batch])
+            if all(item.get("semantic_mask") is not None for item in batch)
+            else None
+        ),
     }
 
 
@@ -1716,8 +1834,21 @@ def flowmatch_noise_and_target(input_latents, noise, sigmas):
     return (1 - sigmas) * input_latents + sigmas * noise, noise - input_latents
 
 
-def weighted_flowmatch_mse(model_pred, training_target, weights):
-    per_sample_loss = (model_pred.float() - training_target.float()).pow(2).flatten(1).mean(dim=1)
+def weighted_flowmatch_mse(model_pred, training_target, weights, semantic_mask=None):
+    squared_error = (model_pred.float() - training_target.float()).pow(2)
+    if semantic_mask is not None:
+        mask = semantic_mask.to(device=squared_error.device, dtype=squared_error.dtype)
+        if mask.ndim == 3:
+            mask = mask.unsqueeze(1)
+        if mask.shape[-2:] != squared_error.shape[-2:]:
+            raise ValueError(
+                f"Semantic mask grid {tuple(mask.shape[-2:])} does not match "
+                f"model grid {tuple(squared_error.shape[-2:])}."
+            )
+        # Spatial 1x-2x weighting is applied first; the existing per-sample
+        # timestep curve then multiplies the resulting mean loss below.
+        squared_error = squared_error * (1.0 + mask.clamp(0.0, 1.0))
+    per_sample_loss = squared_error.flatten(1).mean(dim=1)
     return (per_sample_loss * weights.float()).mean()
 
 
@@ -1841,6 +1972,13 @@ def run_anima_dit_training(config):
         device=device,
         dtype=torch.float32,
     )
+    semantic_loss_enabled = bool(
+        getattr(config, "ANIMA_SEMANTIC_LOSS_ENABLED", False)
+    )
+    print(
+        "INFO: Experimental semantic detail loss: "
+        f"enabled={semantic_loss_enabled}, spatial_weight=1.0x-2.0x"
+    )
 
     reporter = AsyncReporter(total_steps=config.MAX_TRAIN_STEPS, test_param_name="dit")
     diagnostics = TrainingDiagnostics(config.GRADIENT_ACCUMULATION_STEPS)
@@ -1883,7 +2021,12 @@ def run_anima_dit_training(config):
 
         noisy_latents, training_target = flowmatch_noise_and_target(input_latents, noise, sigmas)
         model_pred = run_dit_forward(dit, noisy_latents, timesteps, prompt_emb, t5xxl_ids, config)
-        loss = weighted_flowmatch_mse(model_pred, training_target, loss_weights)
+        loss = weighted_flowmatch_mse(
+            model_pred,
+            training_target,
+            loss_weights,
+            semantic_mask=batch.get("semantic_mask") if semantic_loss_enabled else None,
+        )
         raw_loss_value = loss.detach().float().item()
         (loss / config.GRADIENT_ACCUMULATION_STEPS).backward()
 

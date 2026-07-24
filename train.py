@@ -206,11 +206,18 @@ def set_attention_processor(unet, attention_mode="flash_attn"):
         else:
             print("WARNING: CuDNN SDPA requires PyTorch 2.5+, falling back to standard SDPA")
             unet.set_attn_processor(AttnProcessor2_0())
-    elif attention_mode == "xformers (Only if no Flash)":
+    elif attention_mode in ("xformers", "xformers (Only if no Flash)"):
         unet.enable_xformers_memory_efficient_attention()
         print("INFO: Using xFormers")
-        
-    if attention_mode == "pytorch29_optimized":
+    elif attention_mode == "flash_attn":
+        if hasattr(torch.backends.cuda, 'enable_cudnn_sdp'):
+            torch.backends.cuda.enable_cudnn_sdp(False)
+        torch.backends.cuda.enable_flash_sdp(True)
+        torch.backends.cuda.enable_mem_efficient_sdp(False)
+        torch.backends.cuda.enable_math_sdp(False)
+        unet.set_attn_processor(AttnProcessor2_0())
+        print("INFO: Using Flash Attention SDPA backend")
+    elif attention_mode == "pytorch29_optimized":
         try:
             torch.backends.cuda.enable_flash_sdp(True)
             torch.backends.cuda.enable_mem_efficient_sdp(True)
@@ -2683,8 +2690,16 @@ def main():
 
     if config.RESUME_TRAINING:
         if optimizer_state:
-            try: optimizer.load_cpu_state(optimizer_state) if hasattr(optimizer, 'load_cpu_state') else optimizer.load_state_dict(optimizer_state)
-            except: pass
+            try:
+                if hasattr(optimizer, 'load_cpu_state'):
+                    optimizer.load_cpu_state(optimizer_state)
+                else:
+                    optimizer.load_state_dict(optimizer_state)
+            except Exception as e:
+                raise RuntimeError(
+                    "Failed to restore the optimizer state while resuming SDXL training. "
+                    "The resume was aborted to avoid continuing with a fresh optimizer."
+                ) from e
         lr_scheduler.step(micro_step)
 
     print_optimizer_summary(optimizer, config)

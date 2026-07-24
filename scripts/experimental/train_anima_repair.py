@@ -95,7 +95,7 @@ ModelConfig = None
 ANIMA_QAT_TARGET_FORMAT = "bfp16"  # bf16/bfp16, nvfp4, int8, e4m3, or e5m2
 ANIMA_QAT_NVFP4_SCALE_MULTIPLIER = 1.0
 ANIMA_REPAIR_LINEART_LOSS_ENABLED = True
-ANIMA_REPAIR_LINEART_LOSS_STRENGTH = 0.5
+ANIMA_REPAIR_LINEART_LOSS_STRENGTH = 1.0
 
 
 def configure_console_output():
@@ -313,7 +313,7 @@ def get_anima_cache_options(config):
         "vae_caching_tile_size": list(getattr(config, "VAE_CACHING_TILE_SIZE", [96, 96])),
         "vae_caching_tile_stride": list(getattr(config, "VAE_CACHING_TILE_STRIDE", [72, 72])),
         "repair_lineart_loss_enabled": ANIMA_REPAIR_LINEART_LOSS_ENABLED,
-        "repair_lineart_mask_version": 2,
+        "repair_lineart_mask_version": 6,
     }
 
 
