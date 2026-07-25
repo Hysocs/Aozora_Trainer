@@ -19,12 +19,12 @@ It is built for users who want more control than a preset-only trainer, but do n
 
 <table>
   <tr>
-    <td><img src="https://ibb.co/xKYPbDCv" alt="GUI 1" width="425"/></td>
-    <td><img src="https://ibb.co/p6cLYWhL" alt="GUI 2" width="425"/></td>
+    <td><img src="https://i.ibb.co/Gf9BD0xw/NVIDIA-Overlay-C9-Yc5h5yx-Z.png" alt="GUI 1" width="425"/></td>
+    <td><img src="https://i.ibb.co/9m6rQwZr/NVIDIA-Overlay-i-DUf-L7-Abgv.png" alt="GUI 2" width="425"/></td>
   </tr>
   <tr>
-    <td><img src="https://ibb.co/pv3MRV8r" alt="GUI 3" width="425"/></td>
-    <td><img src="https://ibb.co/TMB38Bkn" alt="GUI 4" width="425"/></td>
+    <td><img src="https://i.ibb.co/3y0jM6qY/NVIDIA-Overlay-q-HAt-CFim-Uk.png" alt="GUI 3" width="425"/></td>
+    <td><img src="https://i.ibb.co/YB7sk73K/NVIDIA-Overlay-igy-UYQ74i-W.png" alt="GUI 4" width="425"/></td>
   </tr>
 </table>
 
