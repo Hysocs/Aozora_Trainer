@@ -19,12 +19,12 @@ It is built for users who want more control than a preset-only trainer, but do n
 
 <table>
   <tr>
-    <td><img src="https://i.imgur.com/KWgV0OE.png" alt="GUI 1" width="425"/></td>
-    <td><img src="https://i.imgur.com/XURoDBZ.png" alt="GUI 2" width="425"/></td>
+    <td><img src="https://ibb.co/xKYPbDCv" alt="GUI 1" width="425"/></td>
+    <td><img src="https://ibb.co/p6cLYWhL" alt="GUI 2" width="425"/></td>
   </tr>
   <tr>
-    <td><img src="https://i.imgur.com/uwacboa.png" alt="GUI 3" width="425"/></td>
-    <td><img src="https://i.imgur.com/1OzLZAu.png" alt="GUI 4" width="425"/></td>
+    <td><img src="https://ibb.co/pv3MRV8r" alt="GUI 3" width="425"/></td>
+    <td><img src="https://ibb.co/TMB38Bkn" alt="GUI 4" width="425"/></td>
   </tr>
 </table>
 
