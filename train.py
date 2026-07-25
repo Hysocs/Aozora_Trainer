@@ -33,7 +33,6 @@ from multiprocessing import Pool, cpu_count
 from training_utils.config import config as default_config
 import threading
 import queue
-import tomesd
 from training_utils.optimizers.raven import RavenAdamW
 from training_utils.optimizers.titan import TitanAdamW
 from diffusers.models.attention_processor import (
