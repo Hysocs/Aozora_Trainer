@@ -82,7 +82,7 @@
             ],
             "eps": 1e-08,
             "weight_decay": 0.01,
-            "debias_strength": 0.6,
+            "debias_strength": 1.0,
             "momentum_dtype": "bfloat16"
         },
         "sdxl_titan_params": {
@@ -92,7 +92,7 @@
             ],
             "eps": 1e-08,
             "weight_decay": 0.01,
-            "debias_strength": 0.3,
+            "debias_strength": 1.0,
             "momentum_dtype": "bfloat16"
         },
         "sdxl_loss_type": "MSE",
@@ -190,7 +190,7 @@
             ],
             "eps": 1e-08,
             "weight_decay": 0.01,
-            "debias_strength": 0.3,
+            "debias_strength": 1.0,
             "momentum_dtype": "bfloat16"
         },
         "anima_titan_params": {
@@ -200,7 +200,7 @@
             ],
             "eps": 1e-08,
             "weight_decay": 0.01,
-            "debias_strength": 0.3,
+            "debias_strength": 1.0,
             "momentum_dtype": "bfloat16"
         },
         "anima_loss_type": "MSE",

@@ -29,7 +29,7 @@ class RavenAdamW(Optimizer):
         betas: tuple[float, float] = (0.9, 0.98),
         weight_decay: float = 0.06,
         eps: float = 1e-8,
-        debias_strength: float = 0.9,
+        debias_strength: float = 1.0,
         momentum_dtype: torch.dtype = torch.bfloat16,
     ):
         if not 0.0 <= lr:

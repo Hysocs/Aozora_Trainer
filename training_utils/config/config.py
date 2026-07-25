@@ -124,7 +124,7 @@ RAVEN_PARAMS = {
     "betas": [0.9, 0.999],
     "eps": 1e-8,
     "weight_decay": 0.01,
-    "debias_strength": 0.3,
+    "debias_strength": 1.0,
     "momentum_dtype": "bfloat16"
 }
 PAGED_ADAMW_8BIT_PARAMS = {
@@ -136,7 +136,7 @@ TITAN_PARAMS = {
     "betas": [0.9, 0.999],
     "eps": 1e-8,
     "weight_decay": 0.01,
-    "debias_strength": 0.3,
+    "debias_strength": 1.0,
     "momentum_dtype": "bfloat16"
 }
 # --- Loss Configuration ---
