@@ -1,11 +1,16 @@
 {
     "config_version": 5,
-    "active_mode": "anima",
+    "active_mode": "sdxl",
     "sdxl": {
         "sdxl_output_dir": "C:/Users/Administrator/Desktop/StabilityMatrix-win-x64/Data/Models/StableDiffusion/Trained",
         "sdxl_output_name": "auto",
         "sdxl_resume_training": false,
-        "sdxl_instance_datasets": [],
+        "sdxl_instance_datasets": [
+            {
+                "path": "C:\\Users\\Administrator\\Pictures\\Dan & Gel Artists\\ping_zhong_yu",
+                "repeats": 1
+            }
+        ],
         "sdxl_caching_batch_size": 1,
         "sdxl_text_cache_precision": "bfloat16",
         "sdxl_vae_cache_precision": "bfloat16",
@@ -32,7 +37,7 @@
         "sdxl_multi_bucket_enabled": true,
         "sdxl_multi_bucket_extra_buckets": 1,
         "sdxl_prediction_type": "epsilon",
-        "sdxl_max_train_steps": "1500",
+        "sdxl_max_train_steps": "150",
         "sdxl_batch_size": 1,
         "sdxl_gradient_accumulation_steps": 4,
         "sdxl_mixed_precision": "bfloat16",
@@ -63,16 +68,16 @@
         "sdxl_timestep_allocation": {
             "bin_size": 100,
             "counts": [
-                150,
-                150,
-                150,
-                150,
-                150,
-                150,
-                150,
-                150,
-                150,
-                150
+                15,
+                15,
+                15,
+                15,
+                15,
+                15,
+                15,
+                15,
+                15,
+                15
             ]
         },
         "sdxl_timestep_stratified_sampling": false,
@@ -129,11 +134,11 @@
         "sdxl_vae_scaling_factor": 0.13025,
         "sdxl_vae_latent_channels": 4,
         "sdxl_rebuild_cache": false,
-        "sdxl_base_model_path": "C:/Users/Administrator/Desktop/StabilityMatrix-win-x64/Data/Models/StableDiffusion/chenkinNoobXLCKXL_v05.safetensors",
+        "sdxl_base_model_path": "C:\\Users\\Administrator\\Downloads\\pixelMix_v20.safetensors",
         "sdxl_vae_path": "",
         "sdxl_resume_model_path": "",
         "sdxl_resume_state_path": "",
-        "sdxl_unet_exclude_targets": ""
+        "sdxl_unet_exclude_targets": "down_blocks.2.*.transformer_blocks.*.ff.net.2.*, mid_block.*.transformer_blocks.*.ff.net.2.*, up_blocks.0.*.transformer_blocks.*.ff.net.2.*"
     },
     "anima": {
         "anima_output_dir": "C:/Users/Administrator/Desktop/StabilityMatrix-win-x64/Data/Models/DiffusionModels/Trained",

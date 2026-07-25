@@ -303,6 +303,21 @@ This is important for long training runs, unstable beta testing, or recovering f
 8. **(Important)** set a vae config matching your model!
 9. Press **Train**.
 
+### Recommended 12 GB VRAM Layer Exclusions
+
+To help an SDXL run fit within 12 GB of VRAM, paste these comma-separated
+patterns into **Exclude Layers (Keywords)**:
+
+```text
+down_blocks.2.*.transformer_blocks.*.ff.net.2.*, mid_block.*.transformer_blocks.*.ff.net.2.*, up_blocks.0.*.transformer_blocks.*.ff.net.2.*
+```
+
+For Anima, paste this pattern into **Exclude DiT Layers**:
+
+```text
+llm_adapter.*
+```
+
 ### Linux
 
 Linux support expects an NVIDIA driver and a CUDA-compatible PyTorch installation.
