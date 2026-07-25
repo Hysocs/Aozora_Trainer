@@ -306,7 +306,7 @@ This is important for long training runs, unstable beta testing, or recovering f
 ### Linux
 
 Linux support expects an NVIDIA driver and a CUDA-compatible PyTorch installation.
-The PyQt GUI is not currently validated on Linux, so the configuration-file CLI
+The PySide6 GUI is not currently validated on Linux, so the configuration-file CLI
 is the recommended route.
 
 1. Create and activate a virtual environment (for example, `.venv`).

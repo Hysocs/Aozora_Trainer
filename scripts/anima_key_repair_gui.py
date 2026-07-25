@@ -10,7 +10,7 @@ from pathlib import Path
 
 import torch
 from safetensors import safe_open
-from PyQt6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtWidgets
 
 
 ANIMA_DIT_KEY_PREFIXES = (
@@ -227,16 +227,16 @@ def write_repaired_checkpoint(input_path: Path, output_path: Path, analysis: dic
 
 
 class RepairWorker(QtCore.QObject):
-    progress = QtCore.pyqtSignal(int, str)
-    message = QtCore.pyqtSignal(str)
-    finished = QtCore.pyqtSignal(bool, str)
+    progress = QtCore.Signal(int, str)
+    message = QtCore.Signal(str)
+    finished = QtCore.Signal(bool, str)
 
     def __init__(self, input_path: Path, output_path: Path):
         super().__init__()
         self.input_path = input_path
         self.output_path = output_path
 
-    @QtCore.pyqtSlot()
+    @QtCore.Slot()
     def run(self):
         try:
             analysis = analyze_checkpoint(self.input_path)

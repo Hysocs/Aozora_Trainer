@@ -20,10 +20,10 @@ from datetime import datetime
 from bisect import bisect_left, bisect_right
 from difflib import SequenceMatcher
 
-from PyQt6 import QtWidgets, QtCore, QtGui
-from PyQt6.QtCore import QThread, pyqtSignal, QObject
-from PyQt6.QtWidgets import QFileIconProvider
-from PyQt6.QtCore import QFileInfo
+from PySide6 import QtWidgets, QtCore, QtGui
+from PySide6.QtCore import QThread, Signal, QObject
+from PySide6.QtWidgets import QFileIconProvider
+from PySide6.QtCore import QFileInfo
 import subprocess
 
 from .gui_theme import THEME, make_stylesheet, set_role
@@ -1954,8 +1954,8 @@ class LiveMetricsWidget(QtWidgets.QWidget):
 
 
 class LRCurveWidget(QtWidgets.QWidget):
-    pointsChanged = QtCore.pyqtSignal(list)
-    selectionChanged = QtCore.pyqtSignal(int)
+    pointsChanged = QtCore.Signal(list)
+    selectionChanged = QtCore.Signal(int)
     LOG_FLOOR_DIVISOR = 10000.0
 
     def __init__(self, parent=None):
@@ -2251,7 +2251,7 @@ class LRCurveWidget(QtWidgets.QWidget):
 
 
 class TimestepHistogramWidget(QtWidgets.QWidget):
-    allocationChanged = QtCore.pyqtSignal(dict)
+    allocationChanged = QtCore.Signal(dict)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2432,8 +2432,8 @@ class TimestepHistogramWidget(QtWidgets.QWidget):
 
 
 class TimestepLossWeightCurveWidget(QtWidgets.QWidget):
-    pointsChanged = QtCore.pyqtSignal(list)
-    selectionChanged = QtCore.pyqtSignal(int)
+    pointsChanged = QtCore.Signal(list)
+    selectionChanged = QtCore.Signal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2683,13 +2683,13 @@ class TimestepLossWeightCurveWidget(QtWidgets.QWidget):
 
 
 class ProcessRunner(QThread):
-    logSignal = pyqtSignal(str)
-    paramInfoSignal = pyqtSignal(str)
-    progressSignal = pyqtSignal(str, bool)
-    finishedSignal = pyqtSignal(int)
-    errorSignal = pyqtSignal(str)
-    metricsSignal = pyqtSignal(str)
-    cacheCreatedSignal = pyqtSignal()
+    logSignal = Signal(str)
+    paramInfoSignal = Signal(str)
+    progressSignal = Signal(str, bool)
+    finishedSignal = Signal(int)
+    errorSignal = Signal(str)
+    metricsSignal = Signal(str)
+    cacheCreatedSignal = Signal()
 
     def __init__(self, executable, args, working_dir, env=None, creation_flags=0):
         super().__init__()
@@ -2759,7 +2759,7 @@ class ProcessRunner(QThread):
 
 
 class DatasetLoaderThread(QThread):
-    finished = pyqtSignal(list, str)
+    finished = Signal(list, str)
 
     def __init__(self, path):
         super().__init__()
@@ -2784,7 +2784,7 @@ class DatasetLoaderThread(QThread):
 
 
 class DatasetManagerWidget(QtWidgets.QWidget):
-    datasetsChanged = QtCore.pyqtSignal()
+    datasetsChanged = QtCore.Signal()
 
     def __init__(self, parent_gui):
         super().__init__()

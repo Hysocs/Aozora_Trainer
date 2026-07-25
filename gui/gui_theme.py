@@ -7,7 +7,7 @@ painted controls from drifting away from standard Qt widgets.
 
 from dataclasses import dataclass
 
-from PyQt6 import QtGui, QtWidgets
+from PySide6 import QtGui, QtWidgets
 
 
 @dataclass(frozen=True, slots=True)
