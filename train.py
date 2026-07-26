@@ -18,7 +18,7 @@ import torch
 import torch.nn.functional as F
 from torch.optim import Optimizer
 from torch.utils.data import Dataset, DataLoader, Sampler
-from diffusers import StableDiffusionXLPipeline, AutoencoderKL, FlowMatchEulerDiscreteScheduler, DDPMScheduler, UNet2DConditionModel
+from diffusers import FlowMatchEulerDiscreteScheduler, DDPMScheduler
 from diffusers.optimization import get_scheduler
 from safetensors import safe_open
 from safetensors.torch import save_file, load_file
@@ -37,14 +37,12 @@ import threading
 import queue
 from training_utils.optimizers.raven import RavenAdamW
 from training_utils.optimizers.titan import TitanAdamW
-from diffusers.models.attention_processor import (
-    AttnProcessor2_0,
-    FusedAttnProcessor2_0
+from training_utils.sdxl import (
+    SDXLTrainingComponents,
+    load_sdxl_unet,
+    load_sdxl_vae,
+    set_attention_processor,
 )
-try:
-    from flash_attn import flash_attn_func
-except ImportError:
-    flash_attn_func = None
 from training_utils.caching.cache import (
     CAPTION_JSON_PRIMARY_TYPE,
     CAPTION_JSON_TYPES,
@@ -198,136 +196,6 @@ BN_VAR_SUFFIXES = [
     "normalize.running_var",
 ]
 
-
-class FlashAttnProcessor2_0:
-    """Diffusers attention processor backed directly by Flash Attention 2."""
-
-    def __call__(
-        self,
-        attn,
-        hidden_states,
-        encoder_hidden_states=None,
-        attention_mask=None,
-        temb=None,
-        *args,
-        **kwargs,
-    ):
-        residual = hidden_states
-        if attn.spatial_norm is not None:
-            hidden_states = attn.spatial_norm(hidden_states, temb)
-
-        input_ndim = hidden_states.ndim
-        if input_ndim == 4:
-            batch_size, channel, height, width = hidden_states.shape
-            hidden_states = hidden_states.view(batch_size, channel, height * width).transpose(1, 2)
-
-        batch_size, sequence_length, _ = (
-            hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
-        )
-
-        if attention_mask is not None:
-            attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
-            attention_mask = attention_mask.view(
-                batch_size, attn.heads, -1, attention_mask.shape[-1]
-            )
-
-        if attn.group_norm is not None:
-            hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
-
-        query = attn.to_q(hidden_states)
-
-        if encoder_hidden_states is None:
-            encoder_hidden_states = hidden_states
-        elif attn.norm_cross:
-            encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
-
-        key = attn.to_k(encoder_hidden_states)
-        value = attn.to_v(encoder_hidden_states)
-
-        inner_dim = key.shape[-1]
-        head_dim = inner_dim // attn.heads
-        query = query.view(batch_size, -1, attn.heads, head_dim)
-        key = key.view(batch_size, -1, attn.heads, head_dim)
-        value = value.view(batch_size, -1, attn.heads, head_dim)
-
-        if attn.norm_q is not None:
-            query = attn.norm_q(query)
-        if attn.norm_k is not None:
-            key = attn.norm_k(key)
-
-        can_use_flash_attn = (
-            attention_mask is None
-            and query.is_cuda
-            and query.dtype in (torch.float16, torch.bfloat16)
-        )
-        if can_use_flash_attn:
-            hidden_states = flash_attn_func(query, key, value)
-        else:
-            hidden_states = F.scaled_dot_product_attention(
-                query.transpose(1, 2),
-                key.transpose(1, 2),
-                value.transpose(1, 2),
-                attn_mask=attention_mask,
-                dropout_p=0.0,
-                is_causal=False,
-            ).transpose(1, 2)
-
-        hidden_states = hidden_states.reshape(batch_size, -1, attn.heads * head_dim)
-        hidden_states = hidden_states.to(query.dtype)
-        hidden_states = attn.to_out[0](hidden_states)
-        hidden_states = attn.to_out[1](hidden_states)
-
-        if input_ndim == 4:
-            hidden_states = hidden_states.transpose(-1, -2).reshape(
-                batch_size, channel, height, width
-            )
-
-        if attn.residual_connection:
-            hidden_states = hidden_states + residual
-
-        return hidden_states / attn.rescale_output_factor
-
-
-def set_attention_processor(unet, attention_mode="flash_attn"):
-
-    if attention_mode == "cudnn":
-        if hasattr(torch.backends.cuda, 'enable_cudnn_sdp'):
-            torch.backends.cuda.enable_cudnn_sdp(True)
-            torch.backends.cuda.enable_flash_sdp(False)
-            torch.backends.cuda.enable_mem_efficient_sdp(True)
-            unet.set_attn_processor(AttnProcessor2_0())
-            print("INFO: Using CuDNN SDPA backend (PyTorch 2.5+ optimized)")
-        else:
-            print("WARNING: CuDNN SDPA requires PyTorch 2.5+, falling back to standard SDPA")
-            unet.set_attn_processor(AttnProcessor2_0())
-    elif attention_mode in ("xformers", "xformers (Only if no Flash)"):
-        unet.enable_xformers_memory_efficient_attention()
-        print("INFO: Using xFormers")
-    elif attention_mode in ("flash_attn", "flash_attn (Flash Attention 2)"):
-        if flash_attn_func is None:
-            raise ImportError(
-                "Flash Attention 2 was selected, but the flash-attn package could not be imported. "
-                "Install it in portable_Venv or rerun setup.bat and choose Flash Attention."
-            )
-        unet.set_attn_processor(FlashAttnProcessor2_0())
-        print("INFO: Using Flash Attention 2 package directly")
-    elif attention_mode == "pytorch29_optimized":
-        try:
-            torch.backends.cuda.enable_flash_sdp(True)
-            torch.backends.cuda.enable_mem_efficient_sdp(True)
-            torch.backends.cuda.enable_math_sdp(True)
-            unet.set_attn_processor(AttnProcessor2_0())
-            print("INFO: Using PyTorch 2.9 Optimized SDPA (Flash + MemEfficient + Math)")
-            print(f"      CUDA Version: {torch.version.cuda}")
-            print(f"      PyTorch Version: {torch.__version__}")
-            
-        except Exception as e:
-            print(f"WARNING: PyTorch 2.9 optimization failed: {e}")
-            unet.set_attn_processor(AttnProcessor2_0())
-
-    else:
-        unet.set_attn_processor(AttnProcessor2_0())
-        print("INFO: Using SDPA (PyTorch native)")
 
 def set_seed(seed):
     random.seed(seed)
@@ -1535,63 +1403,6 @@ def check_if_caching_needed(config, include_null_cache=True):
                     needs_caching = True
                     break
     return needs_caching
-
-def load_unet_robust(path, compute_dtype):
-    print(f"INFO: Loading UNet from: {Path(path).name}")
-    in_channels = 4
-    out_channels = 4
-    try:
-        from safetensors import safe_open
-        with safe_open(path, framework="pt", device="cpu") as f:
-            key_in = "model.diffusion_model.input_blocks.0.0.weight"
-            key_out = "model.diffusion_model.out.2.weight"
-            if key_in in f.keys():
-                shape_in = f.get_slice(key_in).get_shape()
-                in_channels = shape_in[1]
-            if key_out in f.keys():
-                shape_out = f.get_slice(key_out).get_shape()
-                out_channels = shape_out[0]
-    except Exception as e:
-        print(f"WARNING: Could not peek into safetensors for channel sizes, falling back to defaults. Error: {e}")
-
-    print(f"INFO: Detected UNet configuration - in_channels: {in_channels}, out_channels: {out_channels}")
-
-    try:
-        unet = UNet2DConditionModel.from_single_file(
-            path,
-            torch_dtype=compute_dtype,
-            low_cpu_mem_usage=True,
-            in_channels=in_channels,
-            out_channels=out_channels
-        )
-        print(f"INFO: Loaded UNet (Channels: In={unet.config.in_channels} / Out={unet.config.out_channels})")
-        return unet
-    except Exception as e:
-        print(f"CRITICAL ERROR: Failed to load UNet. {e}")
-        raise e
-
-def load_vae_robust(path, device, target_channels=None):
-    print(f"INFO: Attempting to load VAE from: {path}")
-    if target_channels is None:
-        try:
-            tensors = load_file(path, device="cpu")
-            for k in ["first_stage_model.quant_conv.weight", "quant_conv.weight"]:
-                if k in tensors:
-                    target_channels = tensors[k].shape[0] // 2
-                    break
-        except Exception: pass
-
-    target_channels = target_channels or 4
-    try:
-        if target_channels != 4:
-            vae = AutoencoderKL.from_single_file(path, torch_dtype=torch.float32, latent_channels=target_channels, ignore_mismatched_sizes=True, low_cpu_mem_usage=False)
-        else:
-            vae = AutoencoderKL.from_single_file(path, torch_dtype=torch.float32, low_cpu_mem_usage=True)
-        print(f"INFO: Successfully loaded VAE with {target_channels} channels.")
-        return vae.to(device)
-    except Exception as e:
-        print(f"CRITICAL ERROR: Failed to load VAE: {e}")
-        raise e
 
 def find_tensor_by_suffix(safetensors_path, suffixes):
     with safe_open(str(safetensors_path), framework="pt", device="cpu") as f:
@@ -2871,25 +2682,26 @@ def main():
         conf_scale      = getattr(config, 'VAE_SCALING_FACTOR', None)
 
         vae_source = config.VAE_PATH if (config.VAE_PATH and Path(config.VAE_PATH).exists()) else config.SINGLE_FILE_CHECKPOINT_PATH
-        vae_for_caching = load_vae_robust(vae_source, device, target_channels=target_channels)
+        vae_for_caching = load_sdxl_vae(vae_source, device, target_channels=target_channels)
         vae_for_caching.config.shift_factor   = conf_shift  if conf_shift  is not None else getattr(vae_for_caching.config, 'shift_factor',   None)
         vae_for_caching.config.scaling_factor = conf_scale  if conf_scale  is not None else getattr(vae_for_caching.config, 'scaling_factor', None)
         print(f"INFO: VAE shift={vae_for_caching.config.shift_factor}, scale={vae_for_caching.config.scaling_factor}, channels={vae_for_caching.config.latent_channels}")
         vae_for_caching.enable_tiling()
         vae_for_caching.enable_slicing()
 
-        base_pipe = StableDiffusionXLPipeline.from_single_file(
-            config.SINGLE_FILE_CHECKPOINT_PATH, vae=vae_for_caching, unet=None,
-            torch_dtype=torch.float32, low_cpu_mem_usage=True
+        sdxl_components = SDXLTrainingComponents.from_single_file(
+            config.SINGLE_FILE_CHECKPOINT_PATH,
+            vae=vae_for_caching,
+            torch_dtype=torch.float32,
         )
-        precompute_and_cache_latents(config, base_pipe.tokenizer, base_pipe.tokenizer_2,
-                                     base_pipe.text_encoder, base_pipe.text_encoder_2,
+        precompute_and_cache_latents(config, sdxl_components.tokenizer, sdxl_components.tokenizer_2,
+                                     sdxl_components.text_encoder, sdxl_components.text_encoder_2,
                                      vae_for_caching, device)
-        del base_pipe, vae_for_caching
+        del sdxl_components, vae_for_caching
         gc.collect(); torch.cuda.empty_cache()
 
     print(f"\n--- Loading Model ---")
-    unet = load_unet_robust(model_to_load, config.compute_dtype)
+    unet = load_sdxl_unet(model_to_load, config.compute_dtype)
     gc.collect(); torch.cuda.empty_cache()
 
     scheduler = None

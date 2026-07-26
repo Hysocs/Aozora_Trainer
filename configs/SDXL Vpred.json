@@ -7,7 +7,7 @@
         "sdxl_resume_training": false,
         "sdxl_instance_datasets": [
             {
-                "path": "C:\\Users\\Administrator\\Pictures\\Dan & Gel Artists\\myapanpan",
+                "path": "C:\\Users\\Administrator\\Pictures\\Game CG(ai_tagged)\\Stigma of Corruption _ Nightbound Courier",
                 "repeats": 1
             }
         ],
@@ -37,7 +37,7 @@
         "sdxl_multi_bucket_enabled": false,
         "sdxl_multi_bucket_extra_buckets": 1,
         "sdxl_prediction_type": "v_prediction",
-        "sdxl_max_train_steps": "750",
+        "sdxl_max_train_steps": "1000",
         "sdxl_batch_size": 1,
         "sdxl_gradient_accumulation_steps": 4,
         "sdxl_mixed_precision": "bfloat16",
@@ -50,12 +50,12 @@
                 6.5e-08
             ],
             [
-                0.06976744,
-                1e-05
+                0.06104651,
+                1.5e-05
             ],
             [
-                0.92151163,
-                1e-05
+                0.93895349,
+                1.5e-05
             ],
             [
                 1.0,
@@ -64,20 +64,20 @@
         ],
         "sdxl_learning_rate": 8e-07,
         "sdxl_lr_graph_min": "6.5e-08",
-        "sdxl_lr_graph_max": "1.0e-05",
+        "sdxl_lr_graph_max": "1.5e-05",
         "sdxl_timestep_allocation": {
             "bin_size": 100,
             "counts": [
-                75,
-                75,
-                75,
-                75,
-                75,
-                75,
-                75,
-                75,
-                75,
-                75
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100
             ]
         },
         "sdxl_timestep_stratified_sampling": true,
@@ -122,7 +122,7 @@
             "momentum_dtype": "bfloat16"
         },
         "sdxl_loss_type": "MSE",
-        "sdxl_memory_efficient_attention": "sdpa",
+        "sdxl_memory_efficient_attention": "flash_attn (Flash Attention 2)",
         "sdxl_timestep_mode": "Wave",
         "sdxl_timestep_odds_scale": 3.0,
         "sdxl_vae_normalization_mode": "scalar",

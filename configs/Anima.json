@@ -143,7 +143,7 @@
         "anima_resume_training": false,
         "anima_instance_datasets": [
             {
-                "path": "C:\\Users\\Administrator\\Pictures\\Dan & Gel Artists\\serizawa_(serizawaroom)",
+                "path": "C:\\Users\\Administrator\\Pictures\\Game CG(ai_tagged)\\Stigma of Corruption _ Nightbound Courier",
                 "repeats": 1
             }
         ],
@@ -384,7 +384,7 @@
         "anima_resume_state_path": "C:/Users/Administrator/Desktop/StabilityMatrix-win-x64/Data/Models/DiffusionModels/Trained/training_state_step_1217.pt",
         "anima_dit_exclude_targets": "llm_adapter.*",
         "anima_cache_folder_name": ".precomputed_anima_dit_cache",
-        "anima_gradient_checkpointing_mode": "Conservative",
+        "anima_gradient_checkpointing_mode": "Full",
         "anima_semantic_loss_enabled": true,
         "anima_vae_caching_tiled": true,
         "anima_vae_caching_tile_size": [

@@ -7,7 +7,7 @@
         "sdxl_resume_training": false,
         "sdxl_instance_datasets": [
             {
-                "path": "C:\\Users\\Administrator\\Pictures\\Dan & Gel Artists\\myapanpan",
+                "path": "C:\\Users\\Administrator\\Pictures\\Game CG(ai_tagged)\\Stigma of Corruption _ Nightbound Courier",
                 "repeats": 1
             }
         ],
@@ -37,11 +37,11 @@
         "sdxl_multi_bucket_enabled": false,
         "sdxl_multi_bucket_extra_buckets": 1,
         "sdxl_prediction_type": "rectified_flow",
-        "sdxl_max_train_steps": "750",
+        "sdxl_max_train_steps": "1000",
         "sdxl_batch_size": 1,
         "sdxl_gradient_accumulation_steps": 4,
         "sdxl_mixed_precision": "bfloat16",
-        "sdxl_clip_grad_norm": 1.0,
+        "sdxl_clip_grad_norm": "1.5",
         "sdxl_seed": 42,
         "sdxl_save_every_n_steps": 1000,
         "sdxl_lr_custom_curve": [
@@ -68,16 +68,16 @@
         "sdxl_timestep_allocation": {
             "bin_size": 100,
             "counts": [
-                75,
-                75,
-                75,
-                75,
-                75,
-                75,
-                75,
-                75,
-                75,
-                75
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100,
+                100
             ]
         },
         "sdxl_timestep_stratified_sampling": true,
@@ -122,7 +122,7 @@
             "momentum_dtype": "bfloat16"
         },
         "sdxl_loss_type": "MSE",
-        "sdxl_memory_efficient_attention": "sdpa",
+        "sdxl_memory_efficient_attention": "flash_attn (Flash Attention 2)",
         "sdxl_timestep_mode": "Wave",
         "sdxl_timestep_odds_scale": 3.0,
         "sdxl_vae_normalization_mode": "scalar",
@@ -130,7 +130,7 @@
         "sdxl_vae_scaling_factor": 0.13025,
         "sdxl_vae_latent_channels": 4,
         "sdxl_rebuild_cache": false,
-        "sdxl_base_model_path": "C:\\Users\\Administrator\\Desktop\\StabilityMatrix-win-x64\\Data\\Models\\StableDiffusion\\aozoraXLVpred_v015AlphaVpred.safetensors",
+        "sdxl_base_model_path": "C:\\Users\\Administrator\\Desktop\\StabilityMatrix-win-x64\\Data\\Models\\StableDiffusion\\yozoraXLRectified_v01.safetensors",
         "sdxl_vae_path": "",
         "sdxl_resume_model_path": "",
         "sdxl_resume_state_path": "",
