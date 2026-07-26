@@ -1787,11 +1787,29 @@ def save_anima_checkpoint_pt(global_step, micro_step, dit, optimizer, lr_schedul
         getattr(config, "ANIMA_DIT_SAVE_PREFIX", ""),
         getattr(config, "ANIMA_STREAMING_SAVE", True),
     )
-    optim_state = optimizer.save_cpu_state() if hasattr(optimizer, "save_cpu_state") else optimizer.state_dict()
+    optimizer_key = str(getattr(config, "OPTIMIZER_TYPE", "")).strip().lower()
+    paged_optimizer = optimizer_key == "paged_adamw_8bit"
+    if paged_optimizer:
+        optim_state = None
+        print(
+            "WARNING: Paged AdamW optimizer state is not saved because CUDA "
+            "paging can fail or reset the GPU during serialization. "
+            "The DiT and training position are still saved; resume will use "
+            "a fresh optimizer.",
+            flush=True,
+        )
+    else:
+        optim_state = (
+            optimizer.save_cpu_state()
+            if hasattr(optimizer, "save_cpu_state")
+            else optimizer.state_dict()
+        )
     torch.save({
         "global_step": global_step,
         "micro_step": micro_step,
         "optimizer_state": optim_state,
+        "optimizer_state_omitted": paged_optimizer,
+        "optimizer_state_omitted_reason": "cuda_uvm_driver_safety" if paged_optimizer else None,
         "sampler_seed": sampler.seed,
         "sampler_pool_index": sampler.pool_index,
         "timestep_sampler_state": sampler.state_dict() if hasattr(sampler, "state_dict") else None,
@@ -1884,6 +1902,13 @@ def run_anima_dit_training(config):
         micro_step = training_state.get("micro_step", training_state.get("global_step", 0) * config.GRADIENT_ACCUMULATION_STEPS)
         optimizer_step = micro_step // config.GRADIENT_ACCUMULATION_STEPS
         optimizer_state = training_state.get("optimizer_state")
+        if training_state.get("optimizer_state_omitted"):
+            print(
+                "WARNING: This checkpoint intentionally omitted paged AdamW "
+                "optimizer state for CUDA UVM driver safety. Resuming Anima "
+                "with a fresh optimizer.",
+                flush=True,
+            )
         saved_sampler_pool_index = training_state.get("sampler_pool_index")
         saved_timestep_sampler_state = training_state.get("timestep_sampler_state")
         saved_noise_generator_state = training_state.get("noise_generator_state")

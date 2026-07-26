@@ -521,7 +521,7 @@ TRANSFORMED_CHECKBOX_KEYS = {
     "TIMESTEP_STRATIFIED_SAMPLING",
 }
 RAW_CHECKBOX_KEYS = {
-    "ANIMA_STREAMING_SAVE",
+    "SDXL_STREAMING_SAVE", "ANIMA_STREAMING_SAVE",
 }
 
 def set_semantic_color(widget, semantic):
@@ -1825,8 +1825,8 @@ class LiveMetricsWidget(QtWidgets.QWidget):
             ("optim_loss", "Optimizer Loss", ACCENT2, 2, "solid"),
             ("optim_loss", "Optimizer Loss EMA", WARN, 3, "solid"),
             ("lr", "LR", ACCENT2, 2, "solid"),
-            ("grad_norm", "Clipped", WARN, 2, "dotted"),
-            ("grad_norm", "Raw", ACCENT2, 4, "solid"),
+            ("grad_norm", "Raw", ACCENT2, 2, "dotted"),
+            ("grad_norm", "Clipped", WARN, 4, "solid"),
         ]:
             self._add_line(graph_name, line_name, color, width, line_style)
         self.graphs['step_loss']['widget'].set_line_visible(self.graphs['step_loss']['lines']['Step Loss'], False)
@@ -3468,6 +3468,7 @@ UI_DEFS = {
     "TOKENIZER_T5XXL_PATH":        ("T5XXL Tokenizer Folder", "Local folder containing the T5XXL tokenizer files for Anima.", "path", "folder"),
     "OUTPUT_DIR":                  ("Output Directory", "Folder where checkpoints will be saved.", "path", "folder"),
     "OUTPUT_NAME":                 ("Output Filename", "Base filename without .safetensors. Insert {uuid} for one six-character lowercase ID per training run.", "line"),
+    "SDXL_STREAMING_SAVE":         ("Low-RAM SDXL Save", "Merge and save the SDXL checkpoint one tensor at a time to reduce peak system RAM during model saves.", "check"),
     "ANIMA_STREAMING_SAVE":        ("Low-RAM Anima Save", "Save Anima DiT safetensors one tensor at a time to reduce peak system RAM during checkpoint saves.", "check"),
     "CACHING_BATCH_SIZE":          ("Caching Batch Size", "Adjust based on VRAM (e.g., 2-8).", "spin", 1, 64),
     "TEXT_CACHE_PRECISION":        ("Text Cache Precision", "Floating-point dtype used for cached text embeddings on disk.", "combo", ["float32", "bfloat16", "float16"]),
@@ -3518,7 +3519,7 @@ UI_DEFS = {
     "LR_GRAPH_MAX":                ("Graph Max LR", "Maximum learning rate displayed on the Y-axis.", "line"),
     "TIMESTEP_STRATIFIED_SAMPLING": ("Stratified Timestep Coverage", "Balance bin order locally and draw each bin's timestep values from shuffled no-repeat decks.", "check"),
     "TIMESTEP_FORCE_IMAGE_BIN_SPREAD": ("Force Image-Bin Spread", "Preplan batch-1 image order so images avoid repeating recent timestep bins while timestep sampling stays unchanged.", "check"),
-    "MEMORY_EFFICIENT_ATTENTION":  ("Attention Backend", "Select the attention mechanism to use.", "combo", ["sdpa", "cudnn", "xformers (Only if no Flash)", "pytorch29_optimized"]),
+    "MEMORY_EFFICIENT_ATTENTION":  ("Attention Backend", "Select the attention mechanism to use.", "combo", ["sdpa", "flash_attn (Flash Attention 2)", "cudnn", "xformers (Only if no Flash)", "pytorch29_optimized"]),
     "LOSS_TYPE":                   ("Loss Type", "Select the loss function strategy.", "combo", ["MSE"]),
     "ANIMA_SEMANTIC_LOSS_ENABLED": (
         "Use Semantic Detail Loss (Experimental)",
@@ -4211,6 +4212,8 @@ class TrainingGUI(QtWidgets.QWidget):
             self.anima_resume_paths_widget.setVisible(is_dit and is_resume)
         if "ANIMA_STREAMING_SAVE" in self.widgets:
             self.widgets["ANIMA_STREAMING_SAVE"].setVisible(is_dit)
+        if "SDXL_STREAMING_SAVE" in self.widgets:
+            self.widgets["SDXL_STREAMING_SAVE"].setVisible(not is_dit)
 
     def _add_vertical_field(self, layout, label, widget, tooltip=None):
         if tooltip:
@@ -4872,6 +4875,7 @@ class TrainingGUI(QtWidgets.QWidget):
             output_name_edit,
             output_name_label.toolTip(),
         )
+        self._add_vertical_widget_key(output_paths_lay, "SDXL_STREAMING_SAVE")
         self._add_vertical_widget_key(output_paths_lay, "ANIMA_STREAMING_SAVE")
         lay.addWidget(self.output_paths_group)
 
@@ -5315,6 +5319,19 @@ class TrainingGUI(QtWidgets.QWidget):
         for lbl, key in core_fields:
             core_lay.addRow(lbl, self.widgets[key])
         lay.addWidget(core_group)
+
+        if prefix == "PAGED_ADAMW_8BIT":
+            self.paged_optimizer_save_warning = QtWidgets.QLabel(
+                "Paged AdamW optimizer states are not saved because CUDA paging "
+                "can fail or reset the GPU during serialization. Checkpoints "
+                "still save the model and training position; resumes use a "
+                "fresh optimizer. Paged AdamW does not work reliably on some "
+                "GPU driver stacks. If training crashes or the system freezes, "
+                "use Raven instead."
+            )
+            self.paged_optimizer_save_warning.setWordWrap(True)
+            self.paged_optimizer_save_warning.setStyleSheet(f"color: {WARN};")
+            lay.addWidget(self.paged_optimizer_save_warning)
 
         if prefix in {"RAVEN", "TITAN"}:
             momentum_group, momentum_lay = group_box("Momentum Precision", QtWidgets.QFormLayout)

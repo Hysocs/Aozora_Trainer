@@ -12,6 +12,8 @@ import math
 import re
 import secrets
 import string
+import struct
+import uuid
 import torch
 import torch.nn.functional as F
 from torch.optim import Optimizer
@@ -39,6 +41,10 @@ from diffusers.models.attention_processor import (
     AttnProcessor2_0,
     FusedAttnProcessor2_0
 )
+try:
+    from flash_attn import flash_attn_func
+except ImportError:
+    flash_attn_func = None
 from training_utils.caching.cache import (
     CAPTION_JSON_PRIMARY_TYPE,
     CAPTION_JSON_TYPES,
@@ -193,6 +199,95 @@ BN_VAR_SUFFIXES = [
 ]
 
 
+class FlashAttnProcessor2_0:
+    """Diffusers attention processor backed directly by Flash Attention 2."""
+
+    def __call__(
+        self,
+        attn,
+        hidden_states,
+        encoder_hidden_states=None,
+        attention_mask=None,
+        temb=None,
+        *args,
+        **kwargs,
+    ):
+        residual = hidden_states
+        if attn.spatial_norm is not None:
+            hidden_states = attn.spatial_norm(hidden_states, temb)
+
+        input_ndim = hidden_states.ndim
+        if input_ndim == 4:
+            batch_size, channel, height, width = hidden_states.shape
+            hidden_states = hidden_states.view(batch_size, channel, height * width).transpose(1, 2)
+
+        batch_size, sequence_length, _ = (
+            hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
+        )
+
+        if attention_mask is not None:
+            attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
+            attention_mask = attention_mask.view(
+                batch_size, attn.heads, -1, attention_mask.shape[-1]
+            )
+
+        if attn.group_norm is not None:
+            hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
+
+        query = attn.to_q(hidden_states)
+
+        if encoder_hidden_states is None:
+            encoder_hidden_states = hidden_states
+        elif attn.norm_cross:
+            encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
+
+        key = attn.to_k(encoder_hidden_states)
+        value = attn.to_v(encoder_hidden_states)
+
+        inner_dim = key.shape[-1]
+        head_dim = inner_dim // attn.heads
+        query = query.view(batch_size, -1, attn.heads, head_dim)
+        key = key.view(batch_size, -1, attn.heads, head_dim)
+        value = value.view(batch_size, -1, attn.heads, head_dim)
+
+        if attn.norm_q is not None:
+            query = attn.norm_q(query)
+        if attn.norm_k is not None:
+            key = attn.norm_k(key)
+
+        can_use_flash_attn = (
+            attention_mask is None
+            and query.is_cuda
+            and query.dtype in (torch.float16, torch.bfloat16)
+        )
+        if can_use_flash_attn:
+            hidden_states = flash_attn_func(query, key, value)
+        else:
+            hidden_states = F.scaled_dot_product_attention(
+                query.transpose(1, 2),
+                key.transpose(1, 2),
+                value.transpose(1, 2),
+                attn_mask=attention_mask,
+                dropout_p=0.0,
+                is_causal=False,
+            ).transpose(1, 2)
+
+        hidden_states = hidden_states.reshape(batch_size, -1, attn.heads * head_dim)
+        hidden_states = hidden_states.to(query.dtype)
+        hidden_states = attn.to_out[0](hidden_states)
+        hidden_states = attn.to_out[1](hidden_states)
+
+        if input_ndim == 4:
+            hidden_states = hidden_states.transpose(-1, -2).reshape(
+                batch_size, channel, height, width
+            )
+
+        if attn.residual_connection:
+            hidden_states = hidden_states + residual
+
+        return hidden_states / attn.rescale_output_factor
+
+
 def set_attention_processor(unet, attention_mode="flash_attn"):
 
     if attention_mode == "cudnn":
@@ -208,14 +303,14 @@ def set_attention_processor(unet, attention_mode="flash_attn"):
     elif attention_mode in ("xformers", "xformers (Only if no Flash)"):
         unet.enable_xformers_memory_efficient_attention()
         print("INFO: Using xFormers")
-    elif attention_mode == "flash_attn":
-        if hasattr(torch.backends.cuda, 'enable_cudnn_sdp'):
-            torch.backends.cuda.enable_cudnn_sdp(False)
-        torch.backends.cuda.enable_flash_sdp(True)
-        torch.backends.cuda.enable_mem_efficient_sdp(False)
-        torch.backends.cuda.enable_math_sdp(False)
-        unet.set_attn_processor(AttnProcessor2_0())
-        print("INFO: Using Flash Attention SDPA backend")
+    elif attention_mode in ("flash_attn", "flash_attn (Flash Attention 2)"):
+        if flash_attn_func is None:
+            raise ImportError(
+                "Flash Attention 2 was selected, but the flash-attn package could not be imported. "
+                "Install it in portable_Venv or rerun setup.bat and choose Flash Attention."
+            )
+        unet.set_attn_processor(FlashAttnProcessor2_0())
+        print("INFO: Using Flash Attention 2 package directly")
     elif attention_mode == "pytorch29_optimized":
         try:
             torch.backends.cuda.enable_flash_sdp(True)
@@ -257,7 +352,8 @@ def generate_noise(latents, generator, device, dtype=None, step=None, seed=None)
         step_seed = (seed + step) % (2**32 - 1)
         generator.manual_seed(step_seed)
 
-    return torch.randn(latents.shape, device=device, dtype=torch.float32, generator=generator)
+    noise_dtype = dtype if dtype is not None else latents.dtype
+    return torch.randn(latents.shape, device=device, dtype=noise_dtype, generator=generator)
 
 
 def seeded_torch_generator(device, seed, *parts):
@@ -2470,51 +2566,202 @@ def get_unet_key_mapping(current_keys):
         final_mapping[hf_name] = sd_name if sd_name.startswith("model.diffusion_model.") else f"model.diffusion_model.{sd_name}"
     return final_mapping
 
-def save_model(output_path, unet, base_checkpoint_path, compute_dtype):
+SAFETENSORS_DTYPE_NAMES = {
+    torch.float64: "F64",
+    torch.float32: "F32",
+    torch.float16: "F16",
+    torch.bfloat16: "BF16",
+    torch.int64: "I64",
+    torch.int32: "I32",
+    torch.int16: "I16",
+    torch.int8: "I8",
+    torch.uint8: "U8",
+    torch.bool: "BOOL",
+}
+for _name, _code in (
+    ("float8_e4m3fn", "F8_E4M3"),
+    ("float8_e4m3fnuz", "F8_E4M3FNUZ"),
+    ("float8_e5m2", "F8_E5M2"),
+    ("float8_e5m2fnuz", "F8_E5M2FNUZ"),
+    ("complex64", "C64"),
+    ("uint64", "U64"),
+    ("uint32", "U32"),
+    ("uint16", "U16"),
+):
+    _dtype = getattr(torch, _name, None)
+    if _dtype is not None:
+        SAFETENSORS_DTYPE_NAMES[_dtype] = _code
+SAFETENSORS_DTYPE_SIZES = {
+    "F64": 8, "F32": 4, "F16": 2, "BF16": 2,
+    "I64": 8, "I32": 4, "I16": 2, "I8": 1, "U8": 1, "BOOL": 1,
+    "U64": 8, "U32": 4, "U16": 2,
+    "F8_E4M3": 1, "F8_E4M3FNUZ": 1, "F8_E5M2": 1, "F8_E5M2FNUZ": 1,
+    "C64": 8,
+}
+
+
+def _safetensors_dtype_name(dtype):
+    name = SAFETENSORS_DTYPE_NAMES.get(dtype)
+    if name is None:
+        raise TypeError(f"Cannot save tensor with unsupported safetensors dtype: {dtype}")
+    return name
+
+
+def _stream_tensor_to_file(handle, tensor):
+    tensor.reshape(-1).view(torch.uint8).numpy().tofile(handle)
+
+
+def save_sdxl_model_streaming(output_path, unet_state, base_checkpoint_path, key_map, compute_dtype):
+    """Merge a trained UNet into an SDXL checkpoint while holding one CPU tensor at a time."""
+    output_path = Path(output_path)
+    tmp_path = output_path.with_name(f".{output_path.name}.{uuid.uuid4().hex}.tmp")
+    replacement_keys = {
+        target_key: hf_key
+        for hf_key, target_key in key_map.items()
+        if hf_key in unet_state
+    }
+    compute_dtype_name = _safetensors_dtype_name(compute_dtype)
+    converted_base = 0
+    missing = []
+
+    try:
+        with safe_open(str(base_checkpoint_path), framework="pt", device="cpu") as base_file:
+            base_keys = list(base_file.keys())
+            base_key_set = set(base_keys)
+            records = []
+            offset = 0
+            header = {}
+            metadata = base_file.metadata()
+            if metadata:
+                header["__metadata__"] = metadata
+
+            for key in base_keys:
+                tensor_slice = base_file.get_slice(key)
+                shape = list(tensor_slice.get_shape())
+                dtype_name = tensor_slice.get_dtype()
+                if key in replacement_keys:
+                    source = unet_state[replacement_keys[key]]
+                    shape = list(source.shape)
+                    dtype_name = compute_dtype_name
+                elif dtype_name in {"F32", "F16", "BF16"}:
+                    dtype_name = compute_dtype_name
+                    converted_base += 1
+                nbytes = math.prod(shape) * SAFETENSORS_DTYPE_SIZES[dtype_name]
+                header[key] = {
+                    "dtype": dtype_name,
+                    "shape": shape,
+                    "data_offsets": [offset, offset + nbytes],
+                }
+                records.append((key, dtype_name))
+                offset += nbytes
+
+            for target_key, hf_key in replacement_keys.items():
+                if target_key in base_key_set:
+                    continue
+                source = unet_state[hf_key]
+                shape = list(source.shape)
+                nbytes = source.numel() * source.element_size()
+                if source.dtype != compute_dtype:
+                    nbytes = source.numel() * torch.empty((), dtype=compute_dtype).element_size()
+                header[target_key] = {
+                    "dtype": compute_dtype_name,
+                    "shape": shape,
+                    "data_offsets": [offset, offset + nbytes],
+                }
+                records.append((target_key, compute_dtype_name))
+                offset += nbytes
+                missing.append(target_key)
+
+            header_bytes = json.dumps(header, separators=(",", ":")).encode("utf-8")
+            header_bytes += b" " * ((8 - (len(header_bytes) % 8)) % 8)
+
+            with open(tmp_path, "wb") as output_file:
+                output_file.write(struct.pack("<Q", len(header_bytes)))
+                output_file.write(header_bytes)
+                for key, dtype_name in records:
+                    hf_key = replacement_keys.get(key)
+                    if hf_key is not None:
+                        tensor_cpu = unet_state[hf_key].detach().to(
+                            device="cpu", dtype=compute_dtype
+                        ).contiguous()
+                    else:
+                        tensor_cpu = base_file.get_tensor(key)
+                        if dtype_name == compute_dtype_name and tensor_cpu.dtype in {
+                            torch.float32, torch.float16, torch.bfloat16
+                        }:
+                            tensor_cpu = tensor_cpu.to(dtype=compute_dtype)
+                        tensor_cpu = tensor_cpu.contiguous()
+                    _stream_tensor_to_file(output_file, tensor_cpu)
+                    del tensor_cpu
+
+        os.replace(tmp_path, output_path)
+    except Exception:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise
+
+    return len(replacement_keys), missing, converted_base
+
+
+def save_model(output_path, unet, base_checkpoint_path, compute_dtype, streaming_save=True):
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     
     print(f"\nINFO: Saving model to: {output_path.name}")
-    
-    try: base_tensors = load_file(str(base_checkpoint_path), device="cpu")
-    except Exception as e:
-        print(f"ERROR: Could not load base checkpoint: {e}")
-        return
 
     key_map = get_unet_key_mapping(list(unet.state_dict().keys()))
     unet_state = unet.state_dict()
-    
-    print(f"INFO: Base checkpoint keys: {len(base_tensors)}")
-    print(f"INFO: UNet keys to merge:   {len(key_map)}")
 
-    converted = 0
-    for key in base_tensors.keys():
-        if base_tensors[key].dtype in [torch.float32, torch.float16, torch.bfloat16]:
-            base_tensors[key] = base_tensors[key].to(dtype=compute_dtype)
-            converted += 1
+    if streaming_save:
+        print("INFO: Using low-RAM streaming SDXL save.")
+        try:
+            with safe_open(str(base_checkpoint_path), framework="pt", device="cpu") as base_file:
+                print(f"INFO: Base checkpoint keys: {len(list(base_file.keys()))}")
+        except Exception as e:
+            print(f"ERROR: Could not open base checkpoint: {e}")
+            return
+        print(f"INFO: UNet keys to merge:   {len(key_map)}")
+        updated, missing, converted = save_sdxl_model_streaming(
+            output_path, unet_state, base_checkpoint_path, key_map, compute_dtype
+        )
+    else:
+        print("INFO: Using legacy in-memory SDXL save.")
+        try:
+            base_tensors = load_file(str(base_checkpoint_path), device="cpu")
+        except Exception as e:
+            print(f"ERROR: Could not load base checkpoint: {e}")
+            return
+        print(f"INFO: Base checkpoint keys: {len(base_tensors)}")
+        print(f"INFO: UNet keys to merge:   {len(key_map)}")
+        converted = 0
+        for key in base_tensors.keys():
+            if base_tensors[key].dtype in [torch.float32, torch.float16, torch.bfloat16]:
+                base_tensors[key] = base_tensors[key].to(dtype=compute_dtype)
+                converted += 1
+        updated, missing = 0, []
+        for hf_key, target_key in key_map.items():
+            if hf_key in unet_state:
+                if target_key not in base_tensors:
+                    missing.append(target_key)
+                base_tensors[target_key] = unet_state[hf_key].detach().to(
+                    "cpu", dtype=compute_dtype
+                )
+                updated += 1
+        save_file(base_tensors, str(output_path))
+        del base_tensors
+
     print(f"INFO: Converted {converted} base tensors to {compute_dtype}")
-
-    updated, missing = 0, []
-    for hf_key, target_key in key_map.items():
-        if hf_key in unet_state:
-            if target_key not in base_tensors:
-                missing.append(target_key)
-            tensor_cpu = unet_state[hf_key].detach().to("cpu", dtype=compute_dtype)
-            base_tensors[target_key] = tensor_cpu
-            updated += 1
-            del tensor_cpu
-
     print(f"INFO: Merged {updated} UNet layers into checkpoint")
     if missing:
         print(f"WARNING: {len(missing)} keys not found in base checkpoint (new keys added):")
         for k in missing[:5]: print(f"  -> {k}")
         if len(missing) > 5: print(f"  ... and {len(missing) - 5} more")
 
-    print(f"INFO: Saving to disk...")
-    save_file(base_tensors, str(output_path))
     print(f"INFO: Save complete -> {output_path.name}")
 
-    del base_tensors, unet_state, key_map
+    del unet_state, key_map
     gc.collect()
     if torch.cuda.is_available(): torch.cuda.empty_cache()
 
@@ -2523,11 +2770,35 @@ def save_checkpoint_pt(global_step, micro_step, unet, base_checkpoint_path, opti
     output_stem = output_model_stem(config, config.SINGLE_FILE_CHECKPOINT_PATH)
     model_filename = f"{output_stem}_step_{global_step}.safetensors"
     state_filename = f"{output_stem}_training_state_step_{global_step}.pt"
-    save_model(output_dir / model_filename, unet, base_checkpoint_path, config.compute_dtype)
+    save_model(
+        output_dir / model_filename,
+        unet,
+        base_checkpoint_path,
+        config.compute_dtype,
+        getattr(config, "SDXL_STREAMING_SAVE", True),
+    )
 
-    optim_state = optimizer.save_cpu_state() if hasattr(optimizer, 'save_cpu_state') else optimizer.state_dict()
+    optimizer_key = str(getattr(config, "OPTIMIZER_TYPE", "")).strip().lower()
+    paged_optimizer = optimizer_key == "paged_adamw_8bit"
+    if paged_optimizer:
+        optim_state = None
+        print(
+            "WARNING: Paged AdamW optimizer state is not saved because CUDA "
+            "paging can fail or reset the GPU during serialization. "
+            "The model and training position are still saved; resume will use "
+            "a fresh optimizer.",
+            flush=True,
+        )
+    else:
+        optim_state = (
+            optimizer.save_cpu_state()
+            if hasattr(optimizer, "save_cpu_state")
+            else optimizer.state_dict()
+        )
     training_state = {
         'global_step': global_step, 'micro_step': micro_step, 'optimizer_state': optim_state,
+        'optimizer_state_omitted': paged_optimizer,
+        'optimizer_state_omitted_reason': 'cuda_uvm_driver_safety' if paged_optimizer else None,
         'sampler_seed': sampler.seed, 'sampler_epoch': max(sampler.epoch - 1, 0),
         'timestep_sampler_state': timestep_sampler.state_dict() if timestep_sampler is not None and hasattr(timestep_sampler, "state_dict") else None,
         'random_state': random.getstate(), 'numpy_state': np.random.get_state(),
@@ -2563,14 +2834,23 @@ def main():
 
     if config.RESUME_TRAINING:
         print("\n" + "="*50 + "\n--- RESUMING TRAINING SESSION ---\n")
-        training_state = torch.load(Path(config.RESUME_STATE_PATH), map_location="cpu", weights_only=False)
+        training_state = torch.load(
+            Path(config.RESUME_STATE_PATH), map_location="cpu", weights_only=False
+        )
         global_step_saved   = training_state.get('global_step', 0)
         micro_step          = training_state.get('micro_step', global_step_saved * config.GRADIENT_ACCUMULATION_STEPS)
         optimizer_step      = micro_step // config.GRADIENT_ACCUMULATION_STEPS
         initial_sampler_seed = training_state['sampler_seed']
         initial_epoch       = training_state.get('sampler_epoch', 0)
         initial_timestep_sampler_state = training_state.get('timestep_sampler_state')
-        optimizer_state     = training_state['optimizer_state']
+        optimizer_state     = training_state.get('optimizer_state')
+        if training_state.get('optimizer_state_omitted'):
+            print(
+                "WARNING: This checkpoint intentionally omitted paged AdamW "
+                "optimizer state for CUDA UVM driver safety. Resuming with a "
+                "fresh optimizer.",
+                flush=True,
+            )
         model_to_load       = Path(config.RESUME_MODEL_PATH)
         if 'random_state'    in training_state: random.setstate(training_state['random_state'])
         if 'numpy_state'     in training_state: np.random.set_state(training_state['numpy_state'])
@@ -2845,7 +3125,10 @@ def main():
     reporter.shutdown()
     save_model(
         OUTPUT_DIR / f"{output_model_stem(config, config.SINGLE_FILE_CHECKPOINT_PATH)}.safetensors",
-        unet, model_to_load, config.compute_dtype
+        unet,
+        model_to_load,
+        config.compute_dtype,
+        getattr(config, "SDXL_STREAMING_SAVE", True),
     )
     print("All tasks complete. Final model saved.")
 

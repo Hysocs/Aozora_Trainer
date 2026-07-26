@@ -4,10 +4,10 @@
     "sdxl": {
         "sdxl_output_dir": "C:/Users/Administrator/Desktop/StabilityMatrix-win-x64/Data/Models/StableDiffusion/Trained",
         "sdxl_output_name": "auto",
-        "sdxl_resume_training": true,
+        "sdxl_resume_training": false,
         "sdxl_instance_datasets": [
             {
-                "path": "C:\\Users\\Administrator\\Pictures\\Dan & Gel Artists\\audirenze",
+                "path": "C:\\Users\\Administrator\\Pictures\\Dan & Gel Artists\\serizawa_(serizawaroom)",
                 "repeats": 1
             }
         ],
@@ -33,29 +33,29 @@
         "sdxl_caption_nl_percent": 0,
         "sdxl_caption_tags_nl_percent": 0,
         "sdxl_caption_nl_tags_percent": 0,
-        "sdxl_max_bucket_resolution": "1024",
+        "sdxl_max_bucket_resolution": 1024,
         "sdxl_multi_bucket_enabled": false,
         "sdxl_multi_bucket_extra_buckets": 1,
         "sdxl_prediction_type": "epsilon",
-        "sdxl_max_train_steps": "740",
+        "sdxl_max_train_steps": "2500",
         "sdxl_batch_size": 1,
-        "sdxl_gradient_accumulation_steps": "4",
+        "sdxl_gradient_accumulation_steps": 4,
         "sdxl_mixed_precision": "bfloat16",
         "sdxl_clip_grad_norm": 1.0,
         "sdxl_seed": 42,
-        "sdxl_save_every_n_steps": "150",
+        "sdxl_save_every_n_steps": 1000,
         "sdxl_lr_custom_curve": [
             [
                 0.0,
                 6.5e-08
             ],
             [
-                0.05523256,
-                1e-06
+                0.07267442,
+                3.5e-05
             ],
             [
-                0.94767442,
-                1e-06
+                0.92151163,
+                3.5e-05
             ],
             [
                 1.0,
@@ -64,20 +64,20 @@
         ],
         "sdxl_learning_rate": 8e-07,
         "sdxl_lr_graph_min": "6.5e-08",
-        "sdxl_lr_graph_max": "1e-06",
+        "sdxl_lr_graph_max": "3.5e-05",
         "sdxl_timestep_allocation": {
             "bin_size": 100,
             "counts": [
-                74,
-                74,
-                74,
-                74,
-                74,
-                74,
-                74,
-                74,
-                74,
-                74
+                250,
+                250,
+                250,
+                250,
+                250,
+                250,
+                250,
+                250,
+                250,
+                250
             ]
         },
         "sdxl_timestep_stratified_sampling": true,
@@ -85,42 +85,6 @@
         "sdxl_timestep_loss_weight_curve": [
             [
                 0.0,
-                0.0043
-            ],
-            [
-                0.01001001,
-                0.0483
-            ],
-            [
-                0.02502503,
-                0.1198
-            ],
-            [
-                0.05005005,
-                0.2544
-            ],
-            [
-                0.07507508,
-                0.4107
-            ],
-            [
-                0.1001001,
-                0.5914
-            ],
-            [
-                0.12512513,
-                0.7999
-            ],
-            [
-                0.14014014,
-                0.9399
-            ],
-            [
-                0.14514515,
-                0.9893
-            ],
-            [
-                0.15015015,
                 1.0
             ],
             [
@@ -158,7 +122,7 @@
             "momentum_dtype": "bfloat16"
         },
         "sdxl_loss_type": "MSE",
-        "sdxl_memory_efficient_attention": "flash_attn (Flash Attention 2)",
+        "sdxl_memory_efficient_attention": "sdpa",
         "sdxl_timestep_mode": "Wave",
         "sdxl_timestep_odds_scale": 3.0,
         "sdxl_vae_normalization_mode": "scalar",
@@ -168,9 +132,8 @@
         "sdxl_rebuild_cache": false,
         "sdxl_base_model_path": "C:\\Users\\Administrator\\Desktop\\StabilityMatrix-win-x64\\Data\\Models\\StableDiffusion\\chenkinNoobXLCKXL_v05.safetensors",
         "sdxl_vae_path": "",
-        "sdxl_resume_model_path": "C:\\Users\\Administrator\\Desktop\\StabilityMatrix-win-x64\\Data\\Models\\StableDiffusion\\Trained\\chenkinNoobXLCKXL_v05_trained_37046k_step_15.safetensors",
-        "sdxl_resume_state_path": "C:\\Users\\Administrator\\Desktop\\StabilityMatrix-win-x64\\Data\\Models\\StableDiffusion\\Trained\\chenkinNoobXLCKXL_v05_trained_37046k_training_state_step_15.pt",
-        "sdxl_streaming_save": true,
+        "sdxl_resume_model_path": "",
+        "sdxl_resume_state_path": "",
         "sdxl_unet_exclude_targets": "down_blocks.2.*.transformer_blocks.*.ff.net.2.*, mid_block.*.transformer_blocks.*.ff.net.2.*, up_blocks.0.*.transformer_blocks.*.ff.net.2.*"
     },
     "anima": {
