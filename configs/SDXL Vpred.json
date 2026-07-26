@@ -7,7 +7,7 @@
         "sdxl_resume_training": false,
         "sdxl_instance_datasets": [
             {
-                "path": "C:\\Users\\Administrator\\Pictures\\Dan & Gel Artists\\serizawa_(serizawaroom)",
+                "path": "C:\\Users\\Administrator\\Pictures\\Dan & Gel Artists\\myapanpan",
                 "repeats": 1
             }
         ],
@@ -36,8 +36,8 @@
         "sdxl_max_bucket_resolution": 1024,
         "sdxl_multi_bucket_enabled": false,
         "sdxl_multi_bucket_extra_buckets": 1,
-        "sdxl_prediction_type": "epsilon",
-        "sdxl_max_train_steps": "2500",
+        "sdxl_prediction_type": "v_prediction",
+        "sdxl_max_train_steps": "750",
         "sdxl_batch_size": 1,
         "sdxl_gradient_accumulation_steps": 4,
         "sdxl_mixed_precision": "bfloat16",
@@ -50,12 +50,12 @@
                 6.5e-08
             ],
             [
-                0.07267442,
-                3.5e-05
+                0.06976744,
+                1e-05
             ],
             [
                 0.92151163,
-                3.5e-05
+                1e-05
             ],
             [
                 1.0,
@@ -64,20 +64,20 @@
         ],
         "sdxl_learning_rate": 8e-07,
         "sdxl_lr_graph_min": "6.5e-08",
-        "sdxl_lr_graph_max": "3.5e-05",
+        "sdxl_lr_graph_max": "1.0e-05",
         "sdxl_timestep_allocation": {
             "bin_size": 100,
             "counts": [
-                250,
-                250,
-                250,
-                250,
-                250,
-                250,
-                250,
-                250,
-                250,
-                250
+                75,
+                75,
+                75,
+                75,
+                75,
+                75,
+                75,
+                75,
+                75,
+                75
             ]
         },
         "sdxl_timestep_stratified_sampling": true,
@@ -130,10 +130,11 @@
         "sdxl_vae_scaling_factor": 0.13025,
         "sdxl_vae_latent_channels": 4,
         "sdxl_rebuild_cache": false,
-        "sdxl_base_model_path": "C:\\Users\\Administrator\\Desktop\\StabilityMatrix-win-x64\\Data\\Models\\StableDiffusion\\chenkinNoobXLCKXL_v05.safetensors",
+        "sdxl_base_model_path": "C:\\Users\\Administrator\\Desktop\\StabilityMatrix-win-x64\\Data\\Models\\StableDiffusion\\aozoraXLVpred_v015AlphaVpred.safetensors",
         "sdxl_vae_path": "",
         "sdxl_resume_model_path": "",
         "sdxl_resume_state_path": "",
+        "sdxl_streaming_save": true,
         "sdxl_unet_exclude_targets": "down_blocks.2.*.transformer_blocks.*.ff.net.2.*, mid_block.*.transformer_blocks.*.ff.net.2.*, up_blocks.0.*.transformer_blocks.*.ff.net.2.*"
     },
     "anima": {
