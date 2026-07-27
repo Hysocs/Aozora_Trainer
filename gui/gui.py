@@ -4650,38 +4650,105 @@ class TrainingGUI(QtWidgets.QWidget):
             self.dataset_manager.release_preview_resources(clear_caption_cache=True)
 
     def _show_json_caption_help(self):
-        text = (
-            "TXT CAPTIONS\n"
-            "Place a plain-text caption beside each image using the same base name:\n\n"
-            "  image_001.png\n"
-            "  image_001.txt\n\n"
-            "The entire .txt file is used as that image's caption. If a matching caption "
-            "file is missing, Aozora falls back to the image filename.\n\n"
-            "JSON CAPTIONS\n"
-            "JSON mode lets you provide different caption styles. Place a matching .json "
-            "file beside each image:\n\n"
-            "  image_001.png\n"
-            "  image_001.json\n\n"
-            "A full JSON caption can contain these four recognized keys:\n\n"
-            "{\n"
-            "  \"tags\": \"best quality, score_7, safe, 1girl, solo, pink hair\",\n"
-            "  \"nl\": \"An anime-style girl with pink hair sits in a bedroom.\",\n"
-            "  \"tags_nl\": \"best quality, score_7, safe, 1girl, solo, pink hair. An anime-style girl with pink hair sits in a bedroom.\",\n"
-            "  \"nl_tags\": \"An anime-style girl with pink hair sits in a bedroom. best quality, score_7, safe, 1girl, solo, pink hair\"\n"
-            "}\n\n"
-            "\"tags\" is a tag list, \"nl\" is natural language, \"tags_nl\" puts tags "
-            "first, and \"nl_tags\" puts natural language first. Filling all four gives "
-            "the most flexibility, but it is not required.\n\n"
-            "If you only want to train with tags, this JSON is enough:\n\n"
-            "{\n"
-            "  \"tags\": \"best quality, score_7, safe, 1girl, solo, pink hair\"\n"
-            "}\n\n"
-            "At least one recognized key must contain a non-empty caption. Extra keys are "
-            "ignored. Aozora caches every available caption variant. The four percentage "
-            "sliders act as relative training-time weights; caption styles that are not "
-            "present in the JSON file are not selected."
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Caption Type Help")
+        dialog.setMinimumSize(680, 560)
+        dialog.resize(760, 700)
+
+        outer = QtWidgets.QVBoxLayout(dialog)
+        outer.setContentsMargins(14, 14, 14, 14)
+        outer.setSpacing(10)
+
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        content = QtWidgets.QWidget()
+        content_lay = QtWidgets.QVBoxLayout(content)
+        content_lay.setContentsMargins(4, 2, 12, 4)
+        content_lay.setSpacing(12)
+
+        def add_heading(text):
+            label = make_label(text, color=ACCENT2, bold=True, size=12)
+            content_lay.addWidget(label)
+
+        def add_paragraph(text):
+            label = QtWidgets.QLabel(text)
+            label.setWordWrap(True)
+            label.setTextInteractionFlags(
+                QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
+            )
+            content_lay.addWidget(label)
+
+        def add_example(text):
+            label = QtWidgets.QLabel(text)
+            label.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+            label.setTextInteractionFlags(
+                QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
+            )
+            label.setFont(QtGui.QFontDatabase.systemFont(
+                QtGui.QFontDatabase.SystemFont.FixedFont
+            ))
+            label.setContentsMargins(12, 8, 12, 8)
+            set_role(label, "nested")
+            content_lay.addWidget(label)
+
+        add_heading("TXT CAPTIONS")
+        add_paragraph(
+            "Place a plain-text caption beside each image using the same base name."
         )
-        QtWidgets.QMessageBox.information(self, "Caption Type Help", text)
+        add_example("image_001.png\nimage_001.txt")
+        add_paragraph(
+            "The entire .txt file is used as that image's caption. If a matching "
+            "caption file is missing, Aozora falls back to the image filename."
+        )
+
+        add_heading("JSON CAPTIONS")
+        add_paragraph(
+            "JSON mode lets you provide different caption styles. Place a matching "
+            ".json file beside each image."
+        )
+        add_example("image_001.png\nimage_001.json")
+        add_paragraph(
+            "A full JSON caption can contain these four recognized keys:"
+        )
+        add_example(
+            "{\n"
+            '  "tags": "best quality, score_7, safe, 1girl, solo, pink hair",\n'
+            '  "nl": "An anime-style girl with pink hair sits in a bedroom.",\n'
+            '  "tags_nl": "best quality, score_7, safe, 1girl, solo, pink hair. '
+            'An anime-style girl with pink hair sits in a bedroom.",\n'
+            '  "nl_tags": "An anime-style girl with pink hair sits in a bedroom. '
+            'best quality, score_7, safe, 1girl, solo, pink hair"\n'
+            "}"
+        )
+        add_paragraph(
+            '"tags" is a tag list, "nl" is natural language, "tags_nl" puts tags '
+            'first, and "nl_tags" puts natural language first. Filling all four '
+            "gives the most flexibility, but it is not required."
+        )
+        add_paragraph("If you only want to train with tags, this JSON is enough:")
+        add_example(
+            "{\n"
+            '  "tags": "best quality, score_7, safe, 1girl, solo, pink hair"\n'
+            "}"
+        )
+        add_paragraph(
+            "At least one recognized key must contain a non-empty caption. Extra "
+            "keys are ignored. Aozora caches every available caption variant. The "
+            "four percentage sliders act as relative training-time weights; caption "
+            "styles that are not present in the JSON file are not selected."
+        )
+        content_lay.addStretch(1)
+
+        scroll.setWidget(content)
+        outer.addWidget(scroll, 1)
+
+        close_btn = make_btn("Close", dialog.accept)
+        button_row = QtWidgets.QHBoxLayout()
+        button_row.addStretch(1)
+        button_row.addWidget(close_btn)
+        outer.addLayout(button_row)
+        dialog.exec()
 
     def _update_text_conditioning_scale_controls(self):
         enabled = (
@@ -4875,7 +4942,7 @@ class TrainingGUI(QtWidgets.QWidget):
         lay.addWidget(self.model_paths_group)
 
         self.tokenizer_paths_group, tokenizer_paths_lay = self._make_path_subgroup("Tokenizer Folders")
-        tokenizer_help_btn = make_btn("!", self._show_anima_tokenizer_help)
+        tokenizer_help_btn = make_btn("?", self._show_anima_tokenizer_help)
         tokenizer_help_btn.setFixedSize(24, 24)
         set_role(tokenizer_help_btn, "icon")
         tokenizer_help_btn.setToolTip("Show Anima tokenizer download links")
