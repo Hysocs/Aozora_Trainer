@@ -2465,7 +2465,9 @@ class TimestepLossWeightCurveWidget(QtWidgets.QWidget):
         for p in points or []:
             try:
                 x = max(0.0, min(1.0, float(p[0])))
-                y = max(self.min_weight, min(self.max_weight, float(p[1])))
+                y = max(self.min_weight, float(p[1]))
+                if self.max_weight is not None:
+                    y = min(self.max_weight, y)
                 cleaned.append([x, y])
             except (TypeError, ValueError, IndexError):
                 continue
@@ -2547,19 +2549,27 @@ class TimestepLossWeightCurveWidget(QtWidgets.QWidget):
             self.height() - self.padding['top'] - self.padding['bottom'],
         )
 
+    def _display_max_weight(self):
+        if self.max_weight is not None:
+            return self.max_weight
+        highest = max((point[1] for point in self._points), default=1.0)
+        return max(2.0, highest * 1.05)
+
     def _to_pixel(self, x, y):
         rect = self._graph_rect()
         px = rect.left() + x * rect.width()
-        ny = (y - self.min_weight) / max(self.max_weight - self.min_weight, 1e-9)
+        display_max = self._display_max_weight()
+        ny = (y - self.min_weight) / max(display_max - self.min_weight, 1e-9)
         py = rect.bottom() - ny * rect.height()
         return QtCore.QPointF(px, py)
 
     def _to_data(self, px, py):
         rect = self._graph_rect()
+        display_max = self._display_max_weight()
         x = (px - rect.left()) / max(rect.width(), 1)
         ny = 1.0 - ((max(rect.top(), min(py, rect.bottom())) - rect.top()) / max(rect.height(), 1))
-        y = self.min_weight + ny * (self.max_weight - self.min_weight)
-        return max(0.0, min(1.0, x)), max(self.min_weight, min(self.max_weight, y))
+        y = self.min_weight + ny * (display_max - self.min_weight)
+        return max(0.0, min(1.0, x)), max(self.min_weight, min(display_max, y))
 
     def paintEvent(self, event):
         painter = QtGui.QPainter(self)
@@ -2569,9 +2579,10 @@ class TimestepLossWeightCurveWidget(QtWidgets.QWidget):
         font = painter.font()
         font.setPixelSize(11)
         painter.setFont(font)
+        display_max = self._display_max_weight()
         for i in range(5):
             y = rect.top() + (i / 4) * rect.height()
-            value = self.max_weight - (i / 4) * (self.max_weight - self.min_weight)
+            value = display_max - (i / 4) * (display_max - self.min_weight)
             painter.setPen(self.grid_color)
             painter.drawLine(rect.left(), int(y), rect.right(), int(y))
             painter.setPen(self.text_color)
