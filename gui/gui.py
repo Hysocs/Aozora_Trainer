@@ -4590,7 +4590,8 @@ class TrainingGUI(QtWidgets.QWidget):
         top.addWidget(combo, 1)
         help_btn = make_btn("?", self._show_json_caption_help)
         help_btn.setFixedSize(28, 28)
-        help_btn.setToolTip("Show required JSON caption format")
+        set_role(help_btn, "icon")
+        help_btn.setToolTip("Explain TXT and JSON caption formats")
         top.addWidget(help_btn)
         lay.addLayout(top)
 
@@ -4650,17 +4651,37 @@ class TrainingGUI(QtWidgets.QWidget):
 
     def _show_json_caption_help(self):
         text = (
-            "JSON caption mode expects one .json file next to each image with exact keys:\n\n"
+            "TXT CAPTIONS\n"
+            "Place a plain-text caption beside each image using the same base name:\n\n"
+            "  image_001.png\n"
+            "  image_001.txt\n\n"
+            "The entire .txt file is used as that image's caption. If a matching caption "
+            "file is missing, Aozora falls back to the image filename.\n\n"
+            "JSON CAPTIONS\n"
+            "JSON mode lets you provide different caption styles. Place a matching .json "
+            "file beside each image:\n\n"
+            "  image_001.png\n"
+            "  image_001.json\n\n"
+            "A full JSON caption can contain these four recognized keys:\n\n"
             "{\n"
             "  \"tags\": \"best quality, score_7, safe, 1girl, solo, pink hair\",\n"
             "  \"nl\": \"An anime-style girl with pink hair sits in a bedroom.\",\n"
             "  \"tags_nl\": \"best quality, score_7, safe, 1girl, solo, pink hair. An anime-style girl with pink hair sits in a bedroom.\",\n"
             "  \"nl_tags\": \"An anime-style girl with pink hair sits in a bedroom. best quality, score_7, safe, 1girl, solo, pink hair\"\n"
             "}\n\n"
-            "All four keys must exist and be non-empty. Extra keys are ignored. "
-            "The four sliders are training-time weights; caching stores all four variants."
+            "\"tags\" is a tag list, \"nl\" is natural language, \"tags_nl\" puts tags "
+            "first, and \"nl_tags\" puts natural language first. Filling all four gives "
+            "the most flexibility, but it is not required.\n\n"
+            "If you only want to train with tags, this JSON is enough:\n\n"
+            "{\n"
+            "  \"tags\": \"best quality, score_7, safe, 1girl, solo, pink hair\"\n"
+            "}\n\n"
+            "At least one recognized key must contain a non-empty caption. Extra keys are "
+            "ignored. Aozora caches every available caption variant. The four percentage "
+            "sliders act as relative training-time weights; caption styles that are not "
+            "present in the JSON file are not selected."
         )
-        QtWidgets.QMessageBox.information(self, "JSON Caption Format", text)
+        QtWidgets.QMessageBox.information(self, "Caption Type Help", text)
 
     def _update_text_conditioning_scale_controls(self):
         enabled = (
