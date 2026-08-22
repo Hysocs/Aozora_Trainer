@@ -87,6 +87,27 @@ AnimaImagePipeline = None
 ModelConfig = None
 ANIMA_SEMANTIC_MASK_VERSION = 1
 ANIMA_SEMANTIC_CACHE_FOLDER = ".precomputed_anima_semantic_cache"
+ANIMA_CACHE_VERSION = 7
+ANIMA_TEXT_CONDITIONING_VERSION = 2
+ANIMA_TEXT_SEQUENCE_LENGTH = 512
+ANIMA_TEXT_CACHE_EXTRA_OPTION_KEYS = (
+    "anima_text_conditioning_version",
+    "text_sequence_length",
+    "text_encoder_source_signature",
+    "qwen_tokenizer_source_signature",
+    "t5_tokenizer_source_signature",
+)
+TOKENIZER_SIGNATURE_FILES = (
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "special_tokens_map.json",
+    "added_tokens.json",
+    "spiece.model",
+    "tokenizer.model",
+    "vocab.json",
+    "merges.txt",
+    "config.json",
+)
 
 
 def configure_console_output():
@@ -208,6 +229,43 @@ def anima_expected_cache_paths(root, cache_dir, meta, active_caption_types, json
     return text_paths, cache_dir / f"{safe_filename}_lat.pt"
 
 
+def _resolved_path_signature(path_value):
+    raw = str(path_value or "").strip()
+    if not raw:
+        return {"path": "", "exists": False}
+    path = Path(raw).expanduser()
+    try:
+        path = path.resolve()
+    except OSError:
+        pass
+    signature = {"path": str(path), "exists": path.exists()}
+    if not path.exists():
+        return signature
+    if path.is_file():
+        stat = path.stat()
+        signature.update({"kind": "file", "size": stat.st_size, "mtime_ns": stat.st_mtime_ns})
+    else:
+        signature["kind"] = "directory"
+    return signature
+
+
+def _tokenizer_source_signature(path_value):
+    signature = _resolved_path_signature(path_value)
+    path = Path(signature.get("path", ""))
+    if signature.get("kind") != "directory" or not path.exists():
+        return signature
+
+    files = {}
+    for name in TOKENIZER_SIGNATURE_FILES:
+        candidate = path / name
+        if not candidate.exists() or not candidate.is_file():
+            continue
+        stat = candidate.stat()
+        files[name] = {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+    signature["files"] = files
+    return signature
+
+
 def anima_metadata_matches(payload, meta, check_caption=True):
     if not isinstance(payload, dict):
         return False
@@ -228,14 +286,57 @@ def anima_text_cache_valid(path, meta, caption_type, caption, text_cache_dtype, 
     try:
         payload = torch.load(path, map_location="cpu", weights_only=True)
         prompt_emb = payload.get("prompt_emb")
+        qwen_attention_mask = payload.get("qwen_attention_mask")
         t5xxl_ids = payload.get("t5xxl_ids")
+        t5xxl_attention_mask = payload.get("t5xxl_attention_mask")
         return (
-            prompt_emb is not None
-            and t5xxl_ids is not None
+            isinstance(prompt_emb, torch.Tensor)
+            and isinstance(qwen_attention_mask, torch.Tensor)
+            and isinstance(t5xxl_ids, torch.Tensor)
+            and isinstance(t5xxl_attention_mask, torch.Tensor)
             and prompt_emb.dtype == text_cache_dtype
+            and qwen_attention_mask.dtype == torch.bool
+            and t5xxl_attention_mask.dtype == torch.bool
+            and prompt_emb.ndim == 2
+            and qwen_attention_mask.ndim == 1
+            and t5xxl_ids.ndim == 1
+            and t5xxl_attention_mask.ndim == 1
+            and prompt_emb.shape[0] == ANIMA_TEXT_SEQUENCE_LENGTH
+            and qwen_attention_mask.shape[0] == ANIMA_TEXT_SEQUENCE_LENGTH
+            and t5xxl_ids.shape[0] == ANIMA_TEXT_SEQUENCE_LENGTH
+            and t5xxl_attention_mask.shape[0] == ANIMA_TEXT_SEQUENCE_LENGTH
             and payload.get("caption_type") == caption_type
             and payload.get("caption") == caption
             and anima_metadata_matches(payload, meta, check_caption=True)
+            and anima_text_cache_compatible_options(payload.get("cache_options"), expected_options)
+        )
+    except Exception:
+        return False
+
+
+def anima_null_cache_valid(path, text_cache_dtype, expected_options):
+    try:
+        payload = torch.load(path, map_location="cpu", weights_only=True)
+        prompt_emb = payload.get("prompt_emb")
+        qwen_attention_mask = payload.get("qwen_attention_mask")
+        t5xxl_ids = payload.get("t5xxl_ids")
+        t5xxl_attention_mask = payload.get("t5xxl_attention_mask")
+        return (
+            isinstance(prompt_emb, torch.Tensor)
+            and isinstance(qwen_attention_mask, torch.Tensor)
+            and isinstance(t5xxl_ids, torch.Tensor)
+            and isinstance(t5xxl_attention_mask, torch.Tensor)
+            and prompt_emb.dtype == text_cache_dtype
+            and qwen_attention_mask.dtype == torch.bool
+            and t5xxl_attention_mask.dtype == torch.bool
+            and prompt_emb.ndim == 2
+            and qwen_attention_mask.ndim == 1
+            and t5xxl_ids.ndim == 1
+            and t5xxl_attention_mask.ndim == 1
+            and prompt_emb.shape[0] == ANIMA_TEXT_SEQUENCE_LENGTH
+            and qwen_attention_mask.shape[0] == ANIMA_TEXT_SEQUENCE_LENGTH
+            and t5xxl_ids.shape[0] == ANIMA_TEXT_SEQUENCE_LENGTH
+            and t5xxl_attention_mask.shape[0] == ANIMA_TEXT_SEQUENCE_LENGTH
             and anima_text_cache_compatible_options(payload.get("cache_options"), expected_options)
         )
     except Exception:
@@ -275,7 +376,7 @@ def get_anima_cache_options(config):
         except OSError:
             vae_source_path = str(vae_source)
     return {
-        "version": 6,
+        "version": ANIMA_CACHE_VERSION,
         "cache_schema_version": 1,
         "bucket_layout": BUCKET_LAYOUT_VERSION,
         "text_cache_float_dtype": anima_text_cache_float_dtype_name(config),
@@ -283,7 +384,12 @@ def get_anima_cache_options(config):
         "caption_source_type": caption_source_type(config),
         "caption_json_types": list(anima_caption_types_for_cache(config)),
         "caption_chunking_enabled": False,
-        "caption_embedding_layout": "anima_qwen_t5_ids",
+        "caption_embedding_layout": "anima_qwen_mask_t5_ids_mask_v2",
+        "anima_text_conditioning_version": ANIMA_TEXT_CONDITIONING_VERSION,
+        "text_sequence_length": ANIMA_TEXT_SEQUENCE_LENGTH,
+        "text_encoder_source_signature": _resolved_path_signature(getattr(config, "TEXT_ENCODER_PATH", "")),
+        "qwen_tokenizer_source_signature": _tokenizer_source_signature(getattr(config, "TOKENIZER_PATH", "")),
+        "t5_tokenizer_source_signature": _tokenizer_source_signature(getattr(config, "TOKENIZER_T5XXL_PATH", "")),
         "max_bucket_resolution": get_max_bucket_resolution_for_config(config),
         "should_upscale": bool(getattr(config, "SHOULD_UPSCALE", False)),
         "multi_bucket_enabled": multi_bucket_enabled,
@@ -322,6 +428,7 @@ def anima_text_cache_compatible_options(cached_options, expected_options):
     return cache_text_options_match(
         cached_options,
         expected_options,
+        extra_keys=ANIMA_TEXT_CACHE_EXTRA_OPTION_KEYS,
     )
 
 
@@ -354,16 +461,16 @@ def anima_cache_rebuild_needed_for_root(config, root, expected_options=None, cac
         current_cache_stems = {anima_cache_stem_for_image(root, p) for p in image_paths}
         cached_options = index_data.get("cache_options")
         if not anima_image_layout_options_match(cached_options, expected_options):
-            print(f"INFO: Anima cache rebuild needed for {root}: cache options changed.")
+            print(f"INFO: Anima cache rebuild needed for {root}: image-layout cache options changed.")
             if isinstance(cached_options, dict):
                 for key in CACHE_IMAGE_LAYOUT_OPTION_KEYS + ("caption_json_types",):
                     cached_value = cached_options.get(key, "<missing>")
                     expected_value = expected_options.get(key, "<missing>")
                     if cached_value != expected_value:
                         print(f"  - {key}: cached={cached_value!r}, expected={expected_value!r}")
-            else:
-                print(f"  cached_options={cached_options!r}")
-                print(f"  expected_options={expected_options!r}")
+            return True
+        if not anima_text_cache_compatible_options(cached_options, expected_options):
+            print(f"INFO: Anima cache rebuild needed for {root}: text-conditioning cache options changed.")
             return True
         files = index_data.get("files", [])
         if not files:
@@ -550,9 +657,6 @@ def configure_anima_selective_checkpointing(config):
     mm_op = torch.ops.aten.mm.default
 
     def conservative_policy(_ctx, op, *args, **_kwargs):
-        # Retain wide-to-narrow GEMM outputs, principally the 8192 -> 2048
-        # MLP down projection. Its output is much smaller than the preceding
-        # 2048 -> 8192 expansion, while recomputing it is expensive.
         if op is mm_op and len(args) >= 2:
             lhs, rhs = args[0], args[1]
             if (
@@ -676,9 +780,9 @@ def load_anima_pipe(config, device):
     return pipe
 
 
-def apply_anima_t5_token_dropout(t5xxl_ids, captions, config, pad_id=0):
+def apply_anima_t5_token_dropout(t5xxl_ids, t5xxl_attention_mask, captions, config, pad_id=0):
     if config is None or not getattr(config, "T5_TOKEN_DROPOUT_ENABLED", False):
-        return t5xxl_ids
+        return t5xxl_ids, t5xxl_attention_mask
 
     chance = min(max(float(getattr(config, "T5_TOKEN_DROPOUT_CHANCE", 0.0) or 0.0), 0.0), 1.0)
     min_rate = min(max(float(getattr(config, "T5_TOKEN_DROPOUT_MIN", 0.0) or 0.0), 0.0), 1.0)
@@ -686,14 +790,15 @@ def apply_anima_t5_token_dropout(t5xxl_ids, captions, config, pad_id=0):
     if max_rate < min_rate:
         min_rate, max_rate = max_rate, min_rate
     if chance <= 0.0 or max_rate <= 0.0:
-        return t5xxl_ids
+        return t5xxl_ids, t5xxl_attention_mask
 
-    out = t5xxl_ids.clone()
+    out_ids = t5xxl_ids.clone()
+    out_mask = t5xxl_attention_mask.clone().bool()
     for batch_index, caption in enumerate(captions):
-        ids = out[batch_index]
-        candidates = torch.ones_like(ids, dtype=torch.bool)
-        candidates &= ids.ne(pad_id)
-        if not candidates.any():
+        ids = out_ids[batch_index]
+        mask = out_mask[batch_index]
+        candidate_indices = torch.nonzero(mask, as_tuple=False).flatten()
+        if candidate_indices.numel() <= 0:
             continue
         seed_base = int(getattr(config, "SEED", 42) or 42)
         digest = hashlib.sha256(f"{seed_base}:t5:{caption}".encode("utf-8", errors="ignore")).digest()
@@ -703,13 +808,14 @@ def apply_anima_t5_token_dropout(t5xxl_ids, captions, config, pad_id=0):
         if torch.rand((), device=ids.device, generator=generator).item() >= chance:
             continue
         rate = min_rate + (max_rate - min_rate) * torch.rand((), device=ids.device, generator=generator).item()
-        candidate_indices = torch.nonzero(candidates, as_tuple=False).flatten()
         drop_count = int(round(candidate_indices.numel() * rate))
         if drop_count <= 0:
             continue
         perm = torch.randperm(candidate_indices.numel(), device=ids.device, generator=generator)
-        ids[candidate_indices[perm[:drop_count]]] = pad_id
-    return out
+        dropped = candidate_indices[perm[:drop_count]]
+        ids[dropped] = pad_id
+        mask[dropped] = False
+    return out_ids, out_mask
 
 
 @torch.no_grad()
@@ -720,27 +826,41 @@ def encode_prompt_anima(pipe, caption, device, config=None):
     text_inputs = pipe.tokenizer(
         caption,
         padding="max_length",
-        max_length=512,
+        max_length=ANIMA_TEXT_SEQUENCE_LENGTH,
         truncation=True,
         return_tensors="pt",
     )
     text_input_ids = text_inputs.input_ids.to(device)
-    prompt_masks = text_inputs.attention_mask.to(device).bool()
+    qwen_attention_mask = text_inputs.attention_mask.to(device).bool()
     prompt_embeds = pipe.text_encoder(
         input_ids=text_input_ids,
-        attention_mask=prompt_masks,
+        attention_mask=qwen_attention_mask,
         output_hidden_states=True,
     ).hidden_states[-1]
+    prompt_embeds = prompt_embeds.masked_fill(~qwen_attention_mask.unsqueeze(-1), 0)
 
     t5xxl_text_inputs = pipe.tokenizer_t5xxl(
         caption,
-        max_length=512,
+        padding="max_length",
+        max_length=ANIMA_TEXT_SEQUENCE_LENGTH,
         truncation=True,
         return_tensors="pt",
     )
     t5xxl_ids = t5xxl_text_inputs.input_ids.to(device)
-    t5xxl_ids = apply_anima_t5_token_dropout(t5xxl_ids, caption, config, pad_id=getattr(pipe.tokenizer_t5xxl, "pad_token_id", 0) or 0)
-    return prompt_embeds.to(pipe.torch_dtype), t5xxl_ids
+    t5xxl_attention_mask = t5xxl_text_inputs.attention_mask.to(device).bool()
+    t5xxl_ids, t5xxl_attention_mask = apply_anima_t5_token_dropout(
+        t5xxl_ids,
+        t5xxl_attention_mask,
+        caption,
+        config,
+        pad_id=getattr(pipe.tokenizer_t5xxl, "pad_token_id", 0) or 0,
+    )
+    return (
+        prompt_embeds.to(pipe.torch_dtype),
+        qwen_attention_mask,
+        t5xxl_ids,
+        t5xxl_attention_mask,
+    )
 
 
 @torch.no_grad()
@@ -757,11 +877,22 @@ def encode_image_anima(pipe, image, device, tiled=True, tile_size=(96, 96), tile
     return latents
 
 
-def save_anima_null_conditioning_cache(cache_dir, null_prompt_emb, null_t5xxl_ids, text_cache_dtype):
+def save_anima_null_conditioning_cache(
+    cache_dir,
+    null_prompt_emb,
+    null_qwen_attention_mask,
+    null_t5xxl_ids,
+    null_t5xxl_attention_mask,
+    text_cache_dtype,
+    cache_options,
+):
     torch.save(
         {
             "prompt_emb": null_prompt_emb[0].to(dtype=text_cache_dtype).cpu(),
+            "qwen_attention_mask": null_qwen_attention_mask[0].to(dtype=torch.bool).cpu(),
             "t5xxl_ids": null_t5xxl_ids[0].to(dtype=torch.long).cpu(),
+            "t5xxl_attention_mask": null_t5xxl_attention_mask[0].to(dtype=torch.bool).cpu(),
+            "cache_options": cache_options,
         },
         cache_dir / "null_embeds.pt",
     )
@@ -772,16 +903,19 @@ def ensure_anima_null_conditioning_cache(config, pipe, device):
         return
 
     cache_name = anima_cache_folder_name(config)
-    missing_cache_dirs = []
+    text_cache_dtype = anima_text_cache_float_dtype(config)
+    expected_options = get_anima_cache_options(config)
+    cache_dirs_to_build = []
     for root in anima_dataset_roots(config):
         cache_dir = root / cache_name
-        if cache_index_exists(cache_dir) and not (cache_dir / "null_embeds.pt").exists():
-            missing_cache_dirs.append(cache_dir)
+        null_path = cache_dir / "null_embeds.pt"
+        if cache_index_exists(cache_dir) and not anima_null_cache_valid(null_path, text_cache_dtype, expected_options):
+            cache_dirs_to_build.append(cache_dir)
 
-    if not missing_cache_dirs:
+    if not cache_dirs_to_build:
         return
 
-    print(f"INFO: Creating Anima null conditioning cache for {len(missing_cache_dirs)} dataset(s).")
+    print(f"INFO: Creating Anima null conditioning cache for {len(cache_dirs_to_build)} dataset(s).")
     if hasattr(pipe, "dit"):
         pipe.dit.cpu()
     pipe.vae.cpu()
@@ -789,10 +923,22 @@ def ensure_anima_null_conditioning_cache(config, pipe, device):
     pipe.text_encoder.eval()
 
     with torch.no_grad():
-        null_prompt_emb, null_t5xxl_ids = encode_prompt_anima(pipe, "", device)
-    text_cache_dtype = anima_text_cache_float_dtype(config)
-    for cache_dir in missing_cache_dirs:
-        save_anima_null_conditioning_cache(cache_dir, null_prompt_emb, null_t5xxl_ids, text_cache_dtype)
+        (
+            null_prompt_emb,
+            null_qwen_attention_mask,
+            null_t5xxl_ids,
+            null_t5xxl_attention_mask,
+        ) = encode_prompt_anima(pipe, "", device)
+    for cache_dir in cache_dirs_to_build:
+        save_anima_null_conditioning_cache(
+            cache_dir,
+            null_prompt_emb,
+            null_qwen_attention_mask,
+            null_t5xxl_ids,
+            null_t5xxl_attention_mask,
+            text_cache_dtype,
+            expected_options,
+        )
 
     pipe.text_encoder.cpu()
     gc.collect()
@@ -840,8 +986,7 @@ def ensure_anima_semantic_cache(config):
                             int(item["target_size"][1]) // 8,
                             int(item["target_size"][0]) // 8,
                         )
-                        and int(payload.get("semantic_mask_version", 0))
-                        == ANIMA_SEMANTIC_MASK_VERSION
+                        and int(payload.get("semantic_mask_version", 0)) == ANIMA_SEMANTIC_MASK_VERSION
                         and payload.get("image_file_signature") == expected_signature
                         and bool(torch.isfinite(mask).all().item())
                     )
@@ -912,6 +1057,11 @@ def precompute_and_cache_anima(config, pipe, device):
         f"text={anima_text_cache_float_dtype_name(config)}, "
         f"vae={anima_vae_cache_float_dtype_name(config)}."
     )
+    print(
+        "INFO: Anima text conditioning cache: "
+        f"v{ANIMA_TEXT_CONDITIONING_VERSION}, sequence_length={ANIMA_TEXT_SEQUENCE_LENGTH}, "
+        "Qwen/T5 attention masks enabled."
+    )
     multi_bucket_extra = (
         max(0, int(getattr(config, "MULTI_BUCKET_EXTRA_BUCKETS", 0) or 0))
         if getattr(config, "MULTI_BUCKET_ENABLED", False)
@@ -932,10 +1082,16 @@ def precompute_and_cache_anima(config, pipe, device):
         if cache_index_exists(cache_dir) and not force_recaching:
             try:
                 existing_index = load_cache_index(cache_dir)
-                if not anima_image_layout_options_match(existing_index.get("cache_options"), expected_options):
+                cached_options = existing_index.get("cache_options")
+                if not anima_image_layout_options_match(cached_options, expected_options):
                     print(
-                        f"INFO: Anima cache options changed for {root.name}; "
-                        "reusing compatible cached files and filling only missing variants."
+                        f"INFO: Anima image-layout cache options changed for {root.name}; "
+                        "revalidating images and compatible cache files."
+                    )
+                elif not anima_text_cache_compatible_options(cached_options, expected_options):
+                    print(
+                        f"INFO: Anima text-conditioning cache changed for {root.name}; "
+                        "rebuilding text caches while preserving compatible latents."
                     )
             except Exception:
                 print(f"INFO: Anima cache index for {root.name} is unreadable; rebuilding index from cache files.")
@@ -948,7 +1104,7 @@ def precompute_and_cache_anima(config, pipe, device):
                 print(f"INFO: Removing {len(stale_files)} stale Anima cache item(s) because {root.name} has no images.")
             for f in stale_files:
                 remove_anima_cache_file(f)
-            save_cache_index(cache_dir, {"version": 6, "cache_options": expected_options, "files": []})
+            save_cache_index(cache_dir, {"version": ANIMA_CACHE_VERSION, "cache_options": expected_options, "files": []})
             print(f"WARNING: No images found in {root}")
             continue
 
@@ -973,6 +1129,7 @@ def precompute_and_cache_anima(config, pipe, device):
             existing_index is not None
             and not force_recaching
             and anima_image_layout_options_match(existing_index.get("cache_options"), expected_options)
+            and anima_text_cache_compatible_options(existing_index.get("cache_options"), expected_options)
         )
         if can_reuse_index_metadata and deep_cache_validate:
             can_reuse_index_metadata = cache_payload_options_match_for_index(
@@ -1116,7 +1273,7 @@ def precompute_and_cache_anima(config, pipe, device):
             remove_anima_cache_file(f)
 
         if not text_jobs and not lat_jobs:
-            save_cache_index(cache_dir, {"version": 6, "cache_options": expected_options, "files": index_data})
+            save_cache_index(cache_dir, {"version": ANIMA_CACHE_VERSION, "cache_options": expected_options, "files": index_data})
             print(f"INFO: Anima DiT cache current for {root.name}: {len(index_data)} item(s).")
             continue
 
@@ -1140,20 +1297,39 @@ def precompute_and_cache_anima(config, pipe, device):
             pipe.text_encoder.eval()
             pipe.vae.cpu()
 
-        if null_conditioning_cache_needed(config) and (text_jobs or not (cache_dir / "null_embeds.pt").exists()):
+        null_path = cache_dir / "null_embeds.pt"
+        needs_null = null_conditioning_cache_needed(config) and (
+            bool(text_jobs) or not anima_null_cache_valid(null_path, text_cache_dtype, expected_options)
+        )
+        if needs_null:
             with torch.no_grad():
-                null_prompt_emb, null_t5xxl_ids = encode_prompt_anima(pipe, "", device)
+                (
+                    null_prompt_emb,
+                    null_qwen_attention_mask,
+                    null_t5xxl_ids,
+                    null_t5xxl_attention_mask,
+                ) = encode_prompt_anima(pipe, "", device)
         else:
-            null_prompt_emb, null_t5xxl_ids = None, None
+            null_prompt_emb = None
+            null_qwen_attention_mask = None
+            null_t5xxl_ids = None
+            null_t5xxl_attention_mask = None
 
         if text_jobs:
             with torch.no_grad():
                 with tqdm(total=len(text_jobs), desc=f"Caching Anima text {root.name}", unit="item") as pbar:
                     for m, caption_type, caption, te_path in text_jobs:
-                        prompt_emb, t5xxl_ids = encode_prompt_anima(pipe, caption, device)
+                        (
+                            prompt_emb,
+                            qwen_attention_mask,
+                            t5xxl_ids,
+                            t5xxl_attention_mask,
+                        ) = encode_prompt_anima(pipe, caption, device)
                         torch.save({
                             "prompt_emb": prompt_emb[0].to(dtype=text_cache_dtype).cpu(),
+                            "qwen_attention_mask": qwen_attention_mask[0].to(dtype=torch.bool).cpu(),
                             "t5xxl_ids": t5xxl_ids[0].to(dtype=torch.long).cpu(),
+                            "t5xxl_attention_mask": t5xxl_attention_mask[0].to(dtype=torch.bool).cpu(),
                             "caption_type": caption_type,
                             "caption": caption,
                             "caption_signature": m.get("caption_signature"),
@@ -1170,8 +1346,16 @@ def precompute_and_cache_anima(config, pipe, device):
                         }, te_path)
                         pbar.update(1)
 
-        if null_prompt_emb is not None and null_t5xxl_ids is not None:
-            save_anima_null_conditioning_cache(cache_dir, null_prompt_emb, null_t5xxl_ids, text_cache_dtype)
+        if null_prompt_emb is not None:
+            save_anima_null_conditioning_cache(
+                cache_dir,
+                null_prompt_emb,
+                null_qwen_attention_mask,
+                null_t5xxl_ids,
+                null_t5xxl_attention_mask,
+                text_cache_dtype,
+                expected_options,
+            )
 
         pipe.text_encoder.cpu()
         gc.collect()
@@ -1209,11 +1393,11 @@ def precompute_and_cache_anima(config, pipe, device):
                             cached_latents = latents[0].to(dtype=vae_cache_dtype).cpu()
                             torch.save({
                                 "latents": cached_latents,
-                            "image_path": str(image_path),
-                            "relative_path": str(m["ip"].relative_to(root)),
-                            "image_file_signature": image_file_signature(m["ip"]),
-                            "caption_file_signature": caption_file_signature_for_image(m["ip"], caption_mode),
-                            "original_size": m["original_size"],
+                                "image_path": str(image_path),
+                                "relative_path": str(m["ip"].relative_to(root)),
+                                "image_file_signature": image_file_signature(m["ip"]),
+                                "caption_file_signature": caption_file_signature_for_image(m["ip"], caption_mode),
+                                "original_size": m["original_size"],
                                 "scaled_size": m["scaled_size"],
                                 "target_size": tuple(m["target_resolution"]),
                                 "crop_coords": m.get("crop_coords", (0, 0)),
@@ -1239,7 +1423,7 @@ def precompute_and_cache_anima(config, pipe, device):
             item for item in index_data
             if all(Path(path).exists() for path in anima_cache_paths_for_index_item(item))
         ]
-        save_cache_index(cache_dir, {"version": 6, "cache_options": expected_options, "files": valid_index_data})
+        save_cache_index(cache_dir, {"version": ANIMA_CACHE_VERSION, "cache_options": expected_options, "files": valid_index_data})
         print(f"INFO: Cached {len(valid_index_data)} Anima DiT items to {cache_dir}")
 
     ensure_anima_null_conditioning_cache(config, pipe, device)
@@ -1261,7 +1445,9 @@ class AnimaCachedDataset(Dataset):
         self.caption_weights = get_json_caption_weights(config)
         cache_name = anima_cache_folder_name(config)
         self.null_prompt_emb = None
+        self.null_qwen_attention_mask = None
         self.null_t5xxl_ids = None
+        self.null_t5xxl_attention_mask = None
         self.cond_scale_min, self.cond_scale_max = get_text_conditioning_scale_range(config)
         self.cond_scale_enabled = self.cond_scale_min < 1.0 or self.cond_scale_max > 1.0
         null_dropout_enabled = bool(getattr(config, "UNCONDITIONAL_DROPOUT", False))
@@ -1312,13 +1498,11 @@ class AnimaCachedDataset(Dataset):
                     weights_only=True,
                 )
                 self.null_prompt_emb = null_data["prompt_emb"].squeeze(0) if null_data["prompt_emb"].dim() == 3 else null_data["prompt_emb"]
-                null_t5xxl_ids = null_data["t5xxl_ids"]
-                if null_t5xxl_ids.dim() == 0:
-                    null_t5xxl_ids = null_t5xxl_ids.view(1)
-                elif null_t5xxl_ids.dim() > 1 and null_t5xxl_ids.shape[0] == 1:
-                    null_t5xxl_ids = null_t5xxl_ids.squeeze(0)
-                self.null_t5xxl_ids = null_t5xxl_ids.to(dtype=torch.long)
-            except Exception:
+                self.null_qwen_attention_mask = null_data["qwen_attention_mask"].bool()
+                self.null_t5xxl_ids = null_data["t5xxl_ids"].to(dtype=torch.long)
+                self.null_t5xxl_attention_mask = null_data["t5xxl_attention_mask"].bool()
+            except Exception as e:
+                print(f"WARNING: Could not load Anima null conditioning cache: {e}")
                 self.qwen_null_dropout_prob = 0.0
                 self.t5_null_dropout_prob = 0.0
                 self.cond_scale_enabled = False
@@ -1363,28 +1547,30 @@ class AnimaCachedDataset(Dataset):
             null_prompt_emb = torch.cat([null_prompt_emb, pad], dim=0)
         return prompt_emb, null_prompt_emb.to(dtype=prompt_emb.dtype)
 
-    def _apply_t5_token_dropout(self, ids, rng):
+    def _apply_t5_token_dropout(self, ids, attention_mask, rng):
         if (
             not self.t5_token_dropout_enabled
             or self.t5_token_dropout_chance <= 0.0
             or self.t5_token_dropout_max <= 0.0
             or rng.random() >= self.t5_token_dropout_chance
         ):
-            return ids
+            return ids, attention_mask
 
-        candidates = torch.nonzero(ids.ne(0), as_tuple=False).flatten().tolist()
+        candidates = torch.nonzero(attention_mask.bool(), as_tuple=False).flatten().tolist()
         if not candidates:
-            return ids
+            return ids, attention_mask
 
         rate = rng.uniform(self.t5_token_dropout_min, self.t5_token_dropout_max)
         drop_count = int(round(len(candidates) * rate))
         if drop_count <= 0:
-            return ids
+            return ids, attention_mask
 
-        out = ids.clone()
+        out_ids = ids.clone()
+        out_mask = attention_mask.clone().bool()
         for token_index in rng.sample(candidates, min(drop_count, len(candidates))):
-            out[token_index] = 0
-        return out
+            out_ids[token_index] = 0
+            out_mask[token_index] = False
+        return out_ids, out_mask
 
     def __getitem__(self, i):
         try:
@@ -1415,7 +1601,9 @@ class AnimaCachedDataset(Dataset):
                     else None
                 ),
                 "prompt_emb": data_te["prompt_emb"],
+                "qwen_attention_mask": data_te["qwen_attention_mask"].bool(),
                 "t5xxl_ids": data_te["t5xxl_ids"],
+                "t5xxl_attention_mask": data_te["t5xxl_attention_mask"].bool(),
                 "target_size": item["target_size"],
                 "latent_path": lat_path,
                 "image_key": item.get("relative_path", lat_path),
@@ -1424,14 +1612,25 @@ class AnimaCachedDataset(Dataset):
             qwen_dropped = False
             if self.qwen_null_dropout_prob > 0 and rng.random() < self.qwen_null_dropout_prob:
                 _, null_prompt_emb = self._align_null_prompt_emb(item_data["prompt_emb"])
-                if null_prompt_emb is not None:
+                if null_prompt_emb is not None and self.null_qwen_attention_mask is not None:
                     item_data["prompt_emb"] = null_prompt_emb
+                    item_data["qwen_attention_mask"] = self.null_qwen_attention_mask
                     qwen_dropped = True
+
             if self.t5_null_dropout_prob > 0 and rng.random() < self.t5_null_dropout_prob:
-                if self.null_t5xxl_ids is not None:
+                if self.null_t5xxl_ids is not None and self.null_t5xxl_attention_mask is not None:
                     item_data["t5xxl_ids"] = self.null_t5xxl_ids
+                    item_data["t5xxl_attention_mask"] = self.null_t5xxl_attention_mask
             else:
-                item_data["t5xxl_ids"] = self._apply_t5_token_dropout(item_data["t5xxl_ids"], rng)
+                (
+                    item_data["t5xxl_ids"],
+                    item_data["t5xxl_attention_mask"],
+                ) = self._apply_t5_token_dropout(
+                    item_data["t5xxl_ids"],
+                    item_data["t5xxl_attention_mask"],
+                    rng,
+                )
+
             if not qwen_dropped and self.cond_scale_enabled:
                 scale = rng.uniform(self.cond_scale_min, self.cond_scale_max)
                 prompt_emb, null_prompt_emb = self._align_null_prompt_emb(item_data["prompt_emb"])
@@ -1449,21 +1648,25 @@ def anima_collate_fn(batch):
     if not batch:
         return {}
 
-    for item in batch:
-        if item["t5xxl_ids"].dim() == 0:
-            item["t5xxl_ids"] = item["t5xxl_ids"].view(1)
-    max_t5_len = max(item["t5xxl_ids"].shape[0] for item in batch)
+    max_t5_len = max(item["t5xxl_ids"].numel() for item in batch)
     t5_ids = []
+    t5_masks = []
     for item in batch:
-        ids = item["t5xxl_ids"]
+        ids = item["t5xxl_ids"].reshape(-1)
+        mask = item["t5xxl_attention_mask"].reshape(-1).bool()
         if ids.shape[0] < max_t5_len:
-            ids = torch.cat([ids, torch.zeros(max_t5_len - ids.shape[0], dtype=ids.dtype)], dim=0)
+            pad_len = max_t5_len - ids.shape[0]
+            ids = torch.cat([ids, torch.zeros(pad_len, dtype=ids.dtype)], dim=0)
+            mask = torch.cat([mask, torch.zeros(pad_len, dtype=torch.bool)], dim=0)
         t5_ids.append(ids)
+        t5_masks.append(mask)
 
     return {
         "latents": torch.stack([item["latents"] for item in batch]),
         "prompt_emb": torch.stack([item["prompt_emb"] for item in batch]),
+        "qwen_attention_mask": torch.stack([item["qwen_attention_mask"].bool() for item in batch]),
         "t5xxl_ids": torch.stack(t5_ids),
+        "t5xxl_attention_mask": torch.stack(t5_masks),
         "target_size": [item["target_size"] for item in batch],
         "latent_path": [item["latent_path"] for item in batch],
         "image_key": [item["image_key"] for item in batch],
@@ -1540,9 +1743,7 @@ class AnimaTimestepSampler:
         return index
 
     def state_dict(self):
-        return {
-            "pool_index": self.pool_index,
-        }
+        return {"pool_index": self.pool_index}
 
     def load_state_dict(self, state):
         if not isinstance(state, dict):
@@ -1550,9 +1751,7 @@ class AnimaTimestepSampler:
         self.pool_index = int(state.get("pool_index", self.pool_index)) % len(self.ticket_pool)
 
     def sample(self, batch_size):
-        indices = []
-        for _ in range(batch_size):
-            indices.append(self._sample_from_pool())
+        indices = [self._sample_from_pool() for _ in range(batch_size)]
         return torch.tensor(indices, dtype=torch.long), indices[0]
 
 
@@ -1835,12 +2034,23 @@ def anima_ticket_to_sigma_timestep(ticket_indices, dtype):
     return sigmas[schedule_indices], timesteps[schedule_indices]
 
 
-def run_dit_forward(dit, noisy_latents, timesteps, prompt_emb, t5xxl_ids, config):
+def run_dit_forward(
+    dit,
+    noisy_latents,
+    timesteps,
+    prompt_emb,
+    qwen_attention_mask,
+    t5xxl_ids,
+    t5xxl_attention_mask,
+    config,
+):
     model_output = dit(
         x=noisy_latents.unsqueeze(2),
         timesteps=timesteps / 1000,
         context=prompt_emb,
+        qwen_attention_mask=qwen_attention_mask,
         t5xxl_ids=t5xxl_ids,
+        t5xxl_attention_mask=t5xxl_attention_mask,
         use_gradient_checkpointing=True,
         use_gradient_checkpointing_offload=False,
     )
@@ -1863,8 +2073,6 @@ def weighted_flowmatch_mse(model_pred, training_target, weights, semantic_mask=N
                 f"Semantic mask grid {tuple(mask.shape[-2:])} does not match "
                 f"model grid {tuple(squared_error.shape[-2:])}."
             )
-        # Spatial 1x-2x weighting is applied first; the existing per-sample
-        # timestep curve then multiplies the resulting mean loss below.
         squared_error = squared_error * (1.0 + mask.clamp(0.0, 1.0))
     per_sample_loss = squared_error.flatten(1).mean(dim=1)
     return (per_sample_loss * weights.float()).mean()
@@ -1923,7 +2131,7 @@ def run_anima_dit_training(config):
         if "torch_cuda_state" in training_state and training_state["torch_cuda_state"] is not None:
             torch.cuda.set_rng_state(training_state["torch_cuda_state"])
     else:
-        print("\n" + "=" * 50 + "\n--- STARTING ANIMA DIT TRAINING ---\n" + "=" * 50 + "\n")
+        print("\n" + "=" * 50 + "\n--- STARTING ANIMA DIT TRAINING SESSION ---\n" + "=" * 50 + "\n")
 
     print("INFO: Loading Anima pipeline components on CPU...")
     pipe = load_anima_pipe(config, torch.device("cpu"))
@@ -2034,18 +2242,28 @@ def run_anima_dit_training(config):
         lr_scheduler.step(micro_step)
         input_latents = batch["latents"].to(device=device, dtype=config.compute_dtype, non_blocking=True)
         prompt_emb = batch["prompt_emb"].to(device=device, dtype=config.compute_dtype, non_blocking=True)
-        t5xxl_ids = batch["t5xxl_ids"].to(device=device, non_blocking=True)
+        qwen_attention_mask = batch["qwen_attention_mask"].to(device=device, dtype=torch.bool, non_blocking=True)
+        t5xxl_ids = batch["t5xxl_ids"].to(device=device, dtype=torch.long, non_blocking=True)
+        t5xxl_attention_mask = batch["t5xxl_attention_mask"].to(device=device, dtype=torch.bool, non_blocking=True)
 
         batch_size = input_latents.shape[0]
         ticket_indices, timestep_str = timestep_sampler.sample(batch_size)
         ticket_indices = ticket_indices.to(device=device)
         sigmas, timesteps = anima_ticket_to_sigma_timestep(ticket_indices, config.compute_dtype)
-        # Loss curves are authored in the same ascending coordinate as tickets.
         loss_weights = timestep_loss_weights[ticket_indices]
         noise = torch.randn(input_latents.shape, device=device, dtype=config.compute_dtype, generator=generator)
 
         noisy_latents, training_target = flowmatch_noise_and_target(input_latents, noise, sigmas)
-        model_pred = run_dit_forward(dit, noisy_latents, timesteps, prompt_emb, t5xxl_ids, config)
+        model_pred = run_dit_forward(
+            dit,
+            noisy_latents,
+            timesteps,
+            prompt_emb,
+            qwen_attention_mask,
+            t5xxl_ids,
+            t5xxl_attention_mask,
+            config,
+        )
         loss = weighted_flowmatch_mse(
             model_pred,
             training_target,
