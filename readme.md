@@ -218,9 +218,9 @@ the cost of slower updates.
 - Cache VAE latents, text embeddings, pooled embeddings, and null conditioning.
 - Encode long SDXL captions across multiple CLIP chunks.
 - Assign images to aspect-ratio-aware buckets with correct SDXL size metadata.
-- Optionally cache nearby bucket variants for better aspect-ratio coverage.
+- Select one or more resolution tiers and cache the best aspect-ratio bucket from each tier.
 
-Multi-bucket and caption-chunk caching improve flexibility but use more disk
+Selecting multiple bucket tiers and caption-chunk caching improves flexibility but uses more disk
 space and preprocessing time.
 
 ### Model Compatibility

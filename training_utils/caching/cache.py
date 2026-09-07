@@ -15,9 +15,8 @@ CACHE_IMAGE_LAYOUT_OPTION_KEYS = (
     "cache_schema_version",
     "bucket_layout",
     "max_bucket_resolution",
+    "bucket_resolution_tiers",
     "should_upscale",
-    "multi_bucket_enabled",
-    "multi_bucket_extra_buckets",
     "caption_source_type",
 )
 CACHE_TEXT_OPTION_KEYS = (

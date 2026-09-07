@@ -64,8 +64,9 @@ from train import (
     create_optimizer,
     fix_alpha_channel,
     get_json_caption_weights,
+    get_bucket_resolution_tiers_for_config,
     get_max_bucket_resolution_for_config,
-    get_multi_bucket_resolutions,
+    get_selected_tier_bucket_resolutions,
     get_vae_source_for_config,
     get_text_conditioning_scale_range,
     make_bucket_variant_metadata,
@@ -360,7 +361,7 @@ def anima_lat_cache_valid(path, meta, vae_cache_dtype, expected_options):
 
 
 def get_anima_cache_options(config):
-    multi_bucket_enabled = bool(getattr(config, "MULTI_BUCKET_ENABLED", False))
+    bucket_tiers = get_bucket_resolution_tiers_for_config(config)
     vae_source = get_vae_source_for_config(config)
     vae_source_path = ""
     vae_source_size = None
@@ -391,13 +392,8 @@ def get_anima_cache_options(config):
         "qwen_tokenizer_source_signature": _tokenizer_source_signature(getattr(config, "TOKENIZER_PATH", "")),
         "t5_tokenizer_source_signature": _tokenizer_source_signature(getattr(config, "TOKENIZER_T5XXL_PATH", "")),
         "max_bucket_resolution": get_max_bucket_resolution_for_config(config),
+        "bucket_resolution_tiers": bucket_tiers,
         "should_upscale": bool(getattr(config, "SHOULD_UPSCALE", False)),
-        "multi_bucket_enabled": multi_bucket_enabled,
-        "multi_bucket_extra_buckets": (
-            int(getattr(config, "MULTI_BUCKET_EXTRA_BUCKETS", 0) or 0)
-            if multi_bucket_enabled
-            else 0
-        ),
         "vae_normalization_mode": getattr(config, "VAE_NORMALIZATION_MODE", "scalar"),
         "vae_shift_factor": getattr(config, "VAE_SHIFT_FACTOR", None),
         "vae_scaling_factor": getattr(config, "VAE_SCALING_FACTOR", None),
@@ -1062,13 +1058,8 @@ def precompute_and_cache_anima(config, pipe, device):
         f"v{ANIMA_TEXT_CONDITIONING_VERSION}, sequence_length={ANIMA_TEXT_SEQUENCE_LENGTH}, "
         "Qwen/T5 attention masks enabled."
     )
-    multi_bucket_extra = (
-        max(0, int(getattr(config, "MULTI_BUCKET_EXTRA_BUCKETS", 0) or 0))
-        if getattr(config, "MULTI_BUCKET_ENABLED", False)
-        else 0
-    )
-    if multi_bucket_extra > 0:
-        print(f"INFO: Multi-bucket cache enabled: up to {multi_bucket_extra} extra bucket(s) per image.")
+    bucket_tiers = get_bucket_resolution_tiers_for_config(config)
+    print(f"INFO: Bucket resolution tiers: {', '.join(map(str, bucket_tiers))}.")
 
     for root in roots_to_rebuild:
         if not root.exists():
@@ -1190,12 +1181,11 @@ def precompute_and_cache_anima(config, pipe, device):
 
         expanded_results = []
         for m in (r for r in results if r):
-            buckets = get_multi_bucket_resolutions(
+            buckets = get_selected_tier_bucket_resolutions(
                 m["original_size"][0],
                 m["original_size"][1],
-                max_bucket_area,
+                bucket_tiers,
                 config.SHOULD_UPSCALE,
-                multi_bucket_extra,
             )
             for variant_index, (target_w, target_h) in enumerate(buckets):
                 variant_meta = make_bucket_variant_metadata(m, target_w, target_h, variant_index)

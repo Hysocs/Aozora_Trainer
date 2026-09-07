@@ -234,6 +234,73 @@ class CommitOnPressComboBox(QtWidgets.QComboBox):
 class NoScrollComboBox(CommitOnPressComboBox):
     def wheelEvent(self, e): e.ignore()
 
+
+class CheckedTierComboBox(QtWidgets.QComboBox):
+    selectionChanged = Signal(object)
+
+    def __init__(self, values, parent=None):
+        super().__init__(parent)
+        self.setModel(QtGui.QStandardItemModel(self))
+        for value in values:
+            item = QtGui.QStandardItem(str(value))
+            item.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled | QtCore.Qt.ItemFlag.ItemIsUserCheckable)
+            item.setData(QtCore.Qt.CheckState.Unchecked, QtCore.Qt.ItemDataRole.CheckStateRole)
+            self.model().appendRow(item)
+        self.view().viewport().installEventFilter(self)
+
+    def selectedValues(self):
+        return [
+            int(self.model().item(row).text())
+            for row in range(self.model().rowCount())
+            if self.model().item(row).checkState() == QtCore.Qt.CheckState.Checked
+        ]
+
+    def setSelectedValues(self, values):
+        selected = set(default_config.normalize_bucket_resolution_tiers(values))
+        for row in range(self.model().rowCount()):
+            item = self.model().item(row)
+            item.setCheckState(
+                QtCore.Qt.CheckState.Checked
+                if int(item.text()) in selected
+                else QtCore.Qt.CheckState.Unchecked
+            )
+        self.update()
+
+    def eventFilter(self, watched, event):
+        if watched is self.view().viewport() and event.type() in {
+            QtCore.QEvent.Type.MouseButtonPress,
+            QtCore.QEvent.Type.MouseButtonRelease,
+        }:
+            if event.button() != QtCore.Qt.MouseButton.LeftButton:
+                return True
+            if event.type() == QtCore.QEvent.Type.MouseButtonPress:
+                return True
+            index = self.view().indexAt(event.position().toPoint())
+            if not index.isValid():
+                return True
+            item = self.model().itemFromIndex(index)
+            is_checked = item.checkState() == QtCore.Qt.CheckState.Checked
+            if is_checked and len(self.selectedValues()) == 1:
+                return True
+            item.setCheckState(
+                QtCore.Qt.CheckState.Unchecked if is_checked else QtCore.Qt.CheckState.Checked
+            )
+            self.selectionChanged.emit(self.selectedValues())
+            self.update()
+            return True
+        return super().eventFilter(watched, event)
+
+    def paintEvent(self, event):
+        option = QtWidgets.QStyleOptionComboBox()
+        self.initStyleOption(option)
+        option.currentText = ", ".join(map(str, self.selectedValues()))
+        painter = QtWidgets.QStylePainter(self)
+        painter.drawComplexControl(QtWidgets.QStyle.ComplexControl.CC_ComboBox, option)
+        painter.drawControl(QtWidgets.QStyle.ControlElement.CE_ComboBoxLabel, option)
+
+    def wheelEvent(self, event):
+        event.ignore()
+
 class NoScrollSlider(QtWidgets.QSlider):
     def wheelEvent(self, e): e.ignore()
 
@@ -517,7 +584,7 @@ TRANSFORMED_GROUP_TITLES = {
 TRANSFORMED_CHECKBOX_KEYS = {
     "UNCONDITIONAL_DROPOUT", "TEXT_CONDITIONING_SCALE_ENABLED",
     "T5_TOKEN_DROPOUT_ENABLED", "CAPTION_CHUNKING_ENABLED", "SHOULD_UPSCALE",
-    "MULTI_BUCKET_ENABLED", "TIMESTEP_FORCE_IMAGE_BIN_SPREAD",
+    "TIMESTEP_FORCE_IMAGE_BIN_SPREAD",
     "TIMESTEP_STRATIFIED_SAMPLING",
 }
 RAW_CHECKBOX_KEYS = {
@@ -3502,10 +3569,8 @@ UI_DEFS = {
     "CAPTION_NL_PERCENT":          ("NL %", "Training-time chance to load the cached natural-language caption variant.", "spin", 0, 100),
     "CAPTION_TAGS_NL_PERCENT":     ("Tags+NL %", "Training-time chance to load tags followed by natural language.", "spin", 0, 100),
     "CAPTION_NL_TAGS_PERCENT":     ("NL+Tags %", "Training-time chance to load natural language followed by tags.", "spin", 0, 100),
-    "MAX_BUCKET_RESOLUTION":       ("Max Bucket Size", "Largest square bucket tier. Aspect buckets are chosen from the preset ladder up to this size.", "combo", ["896", "1024", "1152", "1536"]),
+    "BUCKET_RESOLUTION_TIERS":     ("Bucket Resolution Tiers", "Cache one aspect-ratio bucket per selected resolution tier. The highest selected tier is the maximum.", "tier_combo", [896, 1024, 1152, 1280, 1408, 1536]),
     "SHOULD_UPSCALE":              ("Upscale Images", "Upscale small images closer to bucket limit.", "check"),
-    "MULTI_BUCKET_ENABLED":        ("Use Multi-Bucket Cache", "Cache each image into nearby bucket resolutions so concepts are less tied to one aspect ratio.", "check"),
-    "MULTI_BUCKET_EXTRA_BUCKETS":  ("Extra Buckets Per Image", "Maximum number of additional nearby buckets to cache per image. Higher values increase cache time and disk use.", "spin", 0, 8),
     "PREDICTION_TYPE":             ("Prediction Type", "v_prediction, epsilon, or rectified_flow.", "combo", ["epsilon", "v_prediction", "rectified_flow"]),
     "MAX_TRAIN_STEPS":             ("Max Training Steps", "Total number of training steps.", "line"),
     "BATCH_SIZE":                  ("Batch Size", "Number of samples per batch.", "spin", 1, 32),
@@ -4074,6 +4139,9 @@ class TrainingGUI(QtWidgets.QWidget):
         elif wtype == "combo":
             w = NoScrollComboBox(); w.addItems(extra[0])
             w.currentTextChanged.connect(lambda _, k=key: self._sync_widget(k))
+        elif wtype == "tier_combo":
+            w = CheckedTierComboBox(extra[0])
+            w.selectionChanged.connect(lambda _, k=key: self._sync_widget(k))
         elif wtype == "check":
             w = QtWidgets.QCheckBox(label_text); w.setToolTip(tooltip)
             if key in TRANSFORMED_CHECKBOX_KEYS:
@@ -4247,6 +4315,7 @@ class TrainingGUI(QtWidgets.QWidget):
         if isinstance(w, QtWidgets.QLineEdit): self.current_config[key] = w.text().strip()
         elif isinstance(w, QtWidgets.QPlainTextEdit): self.current_config[key] = w.toPlainText().strip()
         elif isinstance(w, QtWidgets.QCheckBox): self.current_config[key] = w.isChecked()
+        elif isinstance(w, CheckedTierComboBox): self.current_config[key] = w.selectedValues()
         elif isinstance(w, QtWidgets.QComboBox): self.current_config[key] = w.currentText()
         elif isinstance(w, QtWidgets.QSlider): self.current_config[key] = w.value()
         elif isinstance(w, (QtWidgets.QSpinBox, QtWidgets.QDoubleSpinBox)): self.current_config[key] = w.value()
@@ -4265,6 +4334,8 @@ class TrainingGUI(QtWidgets.QWidget):
         if isinstance(w, QtWidgets.QLineEdit): w.setText(str(value))
         elif isinstance(w, QtWidgets.QPlainTextEdit): w.setPlainText(str(value))
         elif isinstance(w, QtWidgets.QCheckBox): w.setChecked(bool(value))
+        elif isinstance(w, CheckedTierComboBox):
+            w.setSelectedValues(value)
         elif isinstance(w, QtWidgets.QComboBox):
             text = str(value)
             idx = w.findText(text)
@@ -4525,7 +4596,7 @@ class TrainingGUI(QtWidgets.QWidget):
             ("Batching & DataLoaders", ["CACHING_BATCH_SIZE", "TEXT_CACHE_PRECISION", "VAE_CACHE_PRECISION", "NUM_WORKERS"]),
             ("Conditioning Regularization", ["UNCONDITIONAL_DROPOUT", "UNCONDITIONAL_DROPOUT_CHANCE", "QWEN_NULL_DROPOUT_CHANCE", "T5_NULL_DROPOUT_CHANCE", "TEXT_CONDITIONING_SCALE_ENABLED", "TEXT_CONDITIONING_SCALE_MIN", "TEXT_CONDITIONING_SCALE_MAX", "T5_TOKEN_DROPOUT_ENABLED", "T5_TOKEN_DROPOUT_CHANCE", "T5_TOKEN_DROPOUT_MIN", "T5_TOKEN_DROPOUT_MAX"]),
             ("Caption Cache Options", ["CAPTION_CHUNKING_ENABLED"]),
-            ("Aspect Ratio Bucketing", ["MAX_BUCKET_RESOLUTION", "SHOULD_UPSCALE", "MULTI_BUCKET_ENABLED", "MULTI_BUCKET_EXTRA_BUCKETS"]),
+            ("Aspect Ratio Bucketing", ["BUCKET_RESOLUTION_TIERS", "SHOULD_UPSCALE"]),
             ("Image Scheduling", ["TIMESTEP_FORCE_IMAGE_BIN_SPREAD"]),
         ]:
             settings_lay.addWidget(self._form_group(title, keys))
@@ -4547,16 +4618,10 @@ class TrainingGUI(QtWidgets.QWidget):
         split.setSizes([400, 920])
         layout.addWidget(split, 1)
 
-        if "MULTI_BUCKET_EXTRA_BUCKETS" in self.widgets:
-            self._connect_widget_signal("MULTI_BUCKET_ENABLED", "stateChanged",
-                                        lambda s: self.widgets["MULTI_BUCKET_EXTRA_BUCKETS"].setEnabled(bool(s)))
-            self._connect_widget_signal("MULTI_BUCKET_ENABLED", "stateChanged",
+        if "BUCKET_RESOLUTION_TIERS" in self.widgets:
+            self._connect_widget_signal("BUCKET_RESOLUTION_TIERS", "selectionChanged",
                                         lambda _: self._update_training_calculations())
-            self._connect_widget_signal("MULTI_BUCKET_ENABLED", "stateChanged",
-                                        lambda _: self._update_epoch_markers_on_graph())
-            self._connect_widget_signal("MULTI_BUCKET_EXTRA_BUCKETS", "valueChanged",
-                                        lambda _: self._update_training_calculations())
-            self._connect_widget_signal("MULTI_BUCKET_EXTRA_BUCKETS", "valueChanged",
+            self._connect_widget_signal("BUCKET_RESOLUTION_TIERS", "selectionChanged",
                                         lambda _: self._update_epoch_markers_on_graph())
         if "UNCONDITIONAL_DROPOUT_CHANCE" in self.widgets:
             self._connect_widget_signal("UNCONDITIONAL_DROPOUT", "stateChanged",
@@ -5827,8 +5892,6 @@ class TrainingGUI(QtWidgets.QWidget):
             loss_type = self.current_config.get("LOSS_TYPE", "MSE")
             self.widgets["LOSS_TYPE"].setCurrentText("MSE" if loss_type not in {"MSE"} else loss_type)
 
-            if "MULTI_BUCKET_ENABLED" in self.widgets:
-                self.widgets["MULTI_BUCKET_EXTRA_BUCKETS"].setEnabled(self.widgets["MULTI_BUCKET_ENABLED"].isChecked())
             if "UNCONDITIONAL_DROPOUT" in self.widgets:
                 self._update_null_conditioning_dropout_controls()
             if "TEXT_CONDITIONING_SCALE_ENABLED" in self.widgets:
@@ -5992,9 +6055,8 @@ class TrainingGUI(QtWidgets.QWidget):
 
     def _effective_dataset_image_count(self):
         repeated_images = self.dataset_manager.get_total_repeats()
-        multi_bucket_enabled = self.widgets["MULTI_BUCKET_ENABLED"].isChecked()
-        extra_buckets = self.widgets["MULTI_BUCKET_EXTRA_BUCKETS"].value() if multi_bucket_enabled else 0
-        return repeated_images * (1 + extra_buckets)
+        bucket_count = len(self.widgets["BUCKET_RESOLUTION_TIERS"].selectedValues())
+        return repeated_images * bucket_count
 
     def _update_and_clamp_lr_graph(self):
         if not hasattr(self, 'lr_curve_widget'): return

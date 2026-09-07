@@ -869,8 +869,8 @@ LOW_RES_ASPECT_BUCKETS = [
     (896, 704), (704, 896),
     (768, 768),
 ]
-MAX_BUCKET_RESOLUTION_CHOICES = (896, 1024, 1152, 1536)
-BUCKET_LAYOUT_VERSION = "preset_ladder_v3"
+MAX_BUCKET_RESOLUTION_CHOICES = tuple(default_config.MAX_BUCKET_RESOLUTION_CHOICES)
+BUCKET_LAYOUT_VERSION = "selected_tiers_v4"
 
 
 def resolve_max_bucket_resolution(value=None):
@@ -889,24 +889,34 @@ def resolve_max_bucket_resolution(value=None):
 
 
 def get_max_bucket_resolution_for_config(config):
+    tiers = get_bucket_resolution_tiers_for_config(config)
+    if tiers:
+        return tiers[-1]
     if hasattr(config, "MAX_BUCKET_RESOLUTION"):
         return resolve_max_bucket_resolution(getattr(config, "MAX_BUCKET_RESOLUTION"))
     return resolve_max_bucket_resolution(default_config.MAX_BUCKET_RESOLUTION)
 
 
-def get_bucket_ladder(max_bucket_resolution=None):
-    max_bucket_resolution = resolve_max_bucket_resolution(max_bucket_resolution)
-    buckets = set()
-    if max_bucket_resolution < 1024:
-        tiers = [max_bucket_resolution]
-    else:
-        tiers = [1024, *[tier for tier in (1152, 1536) if tier <= max_bucket_resolution]]
+def get_bucket_resolution_tiers_for_config(config):
+    configured = getattr(config, "BUCKET_RESOLUTION_TIERS", None)
+    if configured is not None:
+        return default_config.normalize_bucket_resolution_tiers(configured)
 
-    for tier in tiers:
-        if tier == 1024:
-            buckets.update(STANDARD_SDXL_BUCKETS)
-            buckets.update(LOW_RES_ASPECT_BUCKETS)
-            continue
+    maximum = resolve_max_bucket_resolution(getattr(config, "MAX_BUCKET_RESOLUTION", None))
+    available = [tier for tier in MAX_BUCKET_RESOLUTION_CHOICES if tier <= maximum]
+    count = 1
+    if getattr(config, "MULTI_BUCKET_ENABLED", False):
+        count += max(0, int(getattr(config, "MULTI_BUCKET_EXTRA_BUCKETS", 0) or 0))
+    return available[-min(count, len(available)):]
+
+
+def get_bucket_tier(tier):
+    tier = resolve_max_bucket_resolution(tier)
+    buckets = set()
+    if tier == 1024:
+        buckets.update(STANDARD_SDXL_BUCKETS)
+        buckets.update(LOW_RES_ASPECT_BUCKETS)
+    else:
         scale = tier / 1024
         for width, height in STANDARD_SDXL_BUCKETS + LOW_RES_ASPECT_BUCKETS:
             scaled_w = max(64, int(round((width * scale) / 64)) * 64)
@@ -916,10 +926,22 @@ def get_bucket_ladder(max_bucket_resolution=None):
     return sorted(buckets, key=lambda item: (item[0] * item[1], item[0], item[1]))
 
 
-def get_optimal_bucket(orig_w, orig_h, target_area=None, stride=64, should_upscale=False):
+def get_bucket_ladder(max_bucket_resolution=None):
+    maximum = resolve_max_bucket_resolution(max_bucket_resolution)
+    tiers = [tier for tier in MAX_BUCKET_RESOLUTION_CHOICES if tier <= maximum]
+    buckets = {bucket for tier in tiers for bucket in get_bucket_tier(tier)}
+
+    return sorted(buckets, key=lambda item: (item[0] * item[1], item[0], item[1]))
+
+
+def get_optimal_bucket(orig_w, orig_h, target_area=None, stride=64, should_upscale=False, tier_only=False):
     orig_ar = orig_w / max(orig_h, 1)
     max_bucket_resolution = resolve_max_bucket_resolution(target_area)
-    candidate_buckets = get_bucket_ladder(max_bucket_resolution)
+    candidate_buckets = (
+        get_bucket_tier(max_bucket_resolution)
+        if tier_only
+        else get_bucket_ladder(max_bucket_resolution)
+    )
     target_area = max_bucket_resolution * max_bucket_resolution
 
     def bucket_score(bw, bh):
@@ -967,6 +989,16 @@ def get_multi_bucket_resolutions(orig_w, orig_h, target_area=None, should_upscal
 
     candidates.sort(key=lambda item: item[0])
     return [primary] + [bucket for _, bucket in candidates[:max_extra]]
+
+
+def get_selected_tier_bucket_resolutions(orig_w, orig_h, bucket_tiers, should_upscale=False):
+    selected = []
+    for tier in default_config.normalize_bucket_resolution_tiers(bucket_tiers):
+        target_area = tier * tier
+        bucket = get_optimal_bucket(orig_w, orig_h, target_area, 64, should_upscale, tier_only=True)
+        if bucket not in selected:
+            selected.append(bucket)
+    return selected
 
 def make_bucket_variant_metadata(base_meta, target_w, target_h, variant_index=0):
     orig_w, orig_h = base_meta["original_size"]
@@ -1235,13 +1267,12 @@ def get_caption_cache_options(config):
         "text_cache_float_dtype": text_cache_float_dtype_name(config),
         "vae_cache_float_dtype": vae_cache_float_dtype_name(config),
         "max_bucket_resolution": get_max_bucket_resolution_for_config(config),
+        "bucket_resolution_tiers": get_bucket_resolution_tiers_for_config(config),
         "should_upscale": bool(getattr(config, "SHOULD_UPSCALE", False)),
         "caption_embedding_layout": "fixed_total_chunks",
         "caption_source_type": caption_source_type(config),
         "caption_json_types": list(CAPTION_JSON_TYPES),
         "caption_chunking_enabled": caption_chunking_enabled(config),
-        "multi_bucket_enabled": bool(getattr(config, "MULTI_BUCKET_ENABLED", False)),
-        "multi_bucket_extra_buckets": int(getattr(config, "MULTI_BUCKET_EXTRA_BUCKETS", 0) or 0) if getattr(config, "MULTI_BUCKET_ENABLED", False) else 0,
         "vae_normalization_mode": getattr(config, "VAE_NORMALIZATION_MODE", "scalar"),
         "vae_shift_factor": getattr(config, "VAE_SHIFT_FACTOR", None),
         "vae_scaling_factor": getattr(config, "VAE_SCALING_FACTOR", None),
@@ -1365,13 +1396,7 @@ def check_if_caching_needed(config, include_null_cache=True):
             needs_caching = True
         expected_te_count = 0
         try:
-            max_bucket_resolution = get_max_bucket_resolution_for_config(config)
-            max_bucket_area = max_bucket_resolution * max_bucket_resolution
-            multi_bucket_extra = (
-                max(0, int(getattr(config, "MULTI_BUCKET_EXTRA_BUCKETS", 0) or 0))
-                if getattr(config, "MULTI_BUCKET_ENABLED", False)
-                else 0
-            )
+            bucket_tiers = get_bucket_resolution_tiers_for_config(config)
             for image_path in image_paths:
                 caption_variant_count = (
                     len(read_caption_variants_for_image(image_path, caption_source_type(config)))
@@ -1379,12 +1404,11 @@ def check_if_caching_needed(config, include_null_cache=True):
                     else 1
                 )
                 with Image.open(image_path) as img:
-                    bucket_count = len(get_multi_bucket_resolutions(
+                    bucket_count = len(get_selected_tier_bucket_resolutions(
                         img.width,
                         img.height,
-                        max_bucket_area,
+                        bucket_tiers,
                         getattr(config, "SHOULD_UPSCALE", False),
-                        multi_bucket_extra,
                     ))
                 expected_te_count += caption_variant_count * bucket_count
         except Exception:
@@ -1597,13 +1621,8 @@ def precompute_and_cache_latents(config, t1, t2, te1, te2, vae, device):
 
         paths = collect_image_paths(root)
         current_cache_stems = {cache_stem_for_image(root, p) for p in paths}
-        multi_bucket_extra = (
-            max(0, int(getattr(config, "MULTI_BUCKET_EXTRA_BUCKETS", 0) or 0))
-            if getattr(config, "MULTI_BUCKET_ENABLED", False)
-            else 0
-        )
-        if multi_bucket_extra > 0:
-            print(f"INFO: Multi-bucket cache enabled: up to {multi_bucket_extra} extra bucket(s) per image.")
+        bucket_tiers = get_bucket_resolution_tiers_for_config(config)
+        print(f"INFO: Bucket resolution tiers: {', '.join(map(str, bucket_tiers))}.")
         force_recaching = bool(getattr(config, "REBUILD_CACHE", False))
         if cache_index_exists(cache_dir) and not force_recaching:
             try:
@@ -1656,12 +1675,11 @@ def precompute_and_cache_latents(config, t1, t2, te1, te2, vae, device):
 
             expanded_results = []
             for m in (r for r in results if r):
-                buckets_for_image = get_multi_bucket_resolutions(
+                buckets_for_image = get_selected_tier_bucket_resolutions(
                     m["original_size"][0],
                     m["original_size"][1],
-                    max_bucket_area,
+                    bucket_tiers,
                     config.SHOULD_UPSCALE,
-                    multi_bucket_extra,
                 )
                 for variant_index, (target_w, target_h) in enumerate(buckets_for_image):
                     expanded_results.append(make_bucket_variant_metadata(m, target_w, target_h, variant_index))

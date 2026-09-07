@@ -4,7 +4,7 @@ import copy
 # DEFAULT CONFIGURATION
 # ====================================================================================
 
-CONFIG_VERSION = 5
+CONFIG_VERSION = 6
 MODE_SDXL = "sdxl"
 MODE_ANIMA = "anima"
 TRAINING_MODE_SDXL = "SDXL"
@@ -72,7 +72,9 @@ SHOULD_UPSCALE = False
 MAX_BUCKET_RESOLUTION = 1024  # Options: 896, 1024, 1152, 1536
 MULTI_BUCKET_ENABLED = False
 MULTI_BUCKET_EXTRA_BUCKETS = 0
-MAX_BUCKET_RESOLUTION_CHOICES = (896, 1024, 1152, 1536)
+MAX_BUCKET_RESOLUTION_CHOICES = (896, 1024, 1152, 1280, 1408, 1536)
+LEGACY_BUCKET_RESOLUTION_CHOICES = (896, 1024, 1152, 1536)
+BUCKET_RESOLUTION_TIERS = [1024]
 
 # --- Core Training Parameters ---
 PREDICTION_TYPE = "v_prediction"
@@ -176,7 +178,7 @@ FLAT_KEYS = [
     "T5_TOKEN_DROPOUT_MIN", "T5_TOKEN_DROPOUT_MAX",
     "CAPTION_CHUNKING_ENABLED", "CAPTION_SOURCE_TYPE", "CAPTION_TAGS_PERCENT",
     "CAPTION_NL_PERCENT", "CAPTION_TAGS_NL_PERCENT", "CAPTION_NL_TAGS_PERCENT",
-    "SHOULD_UPSCALE", "MAX_BUCKET_RESOLUTION", "MULTI_BUCKET_ENABLED", "MULTI_BUCKET_EXTRA_BUCKETS",
+    "SHOULD_UPSCALE", "BUCKET_RESOLUTION_TIERS",
     "PREDICTION_TYPE", "MAX_TRAIN_STEPS", "BATCH_SIZE",
     "GRADIENT_ACCUMULATION_STEPS", "MIXED_PRECISION", "CLIP_GRAD_NORM", "ANIMA_GRADIENT_CHECKPOINTING_MODE", "ANIMA_SEMANTIC_LOSS_ENABLED",
     "SEED", "SAVE_EVERY_N_STEPS", "SDXL_STREAMING_SAVE", "ANIMA_STREAMING_SAVE", "UNET_EXCLUDE_TARGETS", "DIT_EXCLUDE_TARGETS",
@@ -200,8 +202,7 @@ PER_MODE_FLAT_KEYS = [
     "T5_TOKEN_DROPOUT_MAX", "CAPTION_CHUNKING_ENABLED", "SHOULD_UPSCALE",
     "CAPTION_SOURCE_TYPE", "CAPTION_TAGS_PERCENT", "CAPTION_NL_PERCENT",
     "CAPTION_TAGS_NL_PERCENT", "CAPTION_NL_TAGS_PERCENT",
-    "MAX_BUCKET_RESOLUTION", "MULTI_BUCKET_ENABLED",
-    "MULTI_BUCKET_EXTRA_BUCKETS", "PREDICTION_TYPE", "MAX_TRAIN_STEPS",
+    "BUCKET_RESOLUTION_TIERS", "PREDICTION_TYPE", "MAX_TRAIN_STEPS",
     "BATCH_SIZE", "GRADIENT_ACCUMULATION_STEPS", "MIXED_PRECISION",
     "CLIP_GRAD_NORM", "SEED", "SAVE_EVERY_N_STEPS", "LR_CUSTOM_CURVE",
     "LEARNING_RATE", "LR_GRAPH_MIN", "LR_GRAPH_MAX", "TIMESTEP_ALLOCATION", "TIMESTEP_STRATIFIED_SAMPLING", "TIMESTEP_FORCE_IMAGE_BIN_SPREAD", "TIMESTEP_LOSS_WEIGHT_CURVE",
@@ -272,6 +273,40 @@ def default_mode_config(mode_key):
     return config
 
 
+def normalize_bucket_resolution_tiers(value):
+    if not isinstance(value, (list, tuple, set)):
+        value = [value]
+    tiers = []
+    for item in value:
+        try:
+            numeric = int(float(item))
+        except (TypeError, ValueError):
+            continue
+        if numeric in MAX_BUCKET_RESOLUTION_CHOICES and numeric not in tiers:
+            tiers.append(numeric)
+    return sorted(tiers) or [MAX_BUCKET_RESOLUTION]
+
+
+def legacy_bucket_resolution_tiers(mode_config, mode_key):
+    max_key = nested_key_for(mode_key, "MAX_BUCKET_RESOLUTION")
+    enabled_key = nested_key_for(mode_key, "MULTI_BUCKET_ENABLED")
+    extra_key = nested_key_for(mode_key, "MULTI_BUCKET_EXTRA_BUCKETS")
+    try:
+        maximum = int(float(mode_config.get(max_key, MAX_BUCKET_RESOLUTION)))
+    except (TypeError, ValueError):
+        maximum = MAX_BUCKET_RESOLUTION
+    available = [tier for tier in LEGACY_BUCKET_RESOLUTION_CHOICES if tier <= maximum]
+    if not available:
+        available = [LEGACY_BUCKET_RESOLUTION_CHOICES[0]]
+    count = 1
+    if mode_config.get(enabled_key, False):
+        try:
+            count += max(0, int(mode_config.get(extra_key, 0) or 0))
+        except (TypeError, ValueError):
+            pass
+    return available[-min(count, len(available)):]
+
+
 def default_preset():
     return {
         "config_version": CONFIG_VERSION,
@@ -325,6 +360,15 @@ def normalize_preset(config_data):
                 for key, value in config_data[mode_key].items()
                 if key in valid_keys
             })
+            tiers_key = nested_key_for(mode_key, "BUCKET_RESOLUTION_TIERS")
+            if tiers_key in config_data[mode_key]:
+                preset[mode_key][tiers_key] = normalize_bucket_resolution_tiers(
+                    config_data[mode_key][tiers_key]
+                )
+            else:
+                preset[mode_key][tiers_key] = legacy_bucket_resolution_tiers(
+                    config_data[mode_key], mode_key
+                )
             if mode_key == MODE_ANIMA:
                 checkpoint_mode = str(
                     preset[mode_key].get(checkpoint_mode_key, "Full")
