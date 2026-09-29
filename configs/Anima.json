@@ -144,13 +144,13 @@
         "anima_resume_training": false,
         "anima_instance_datasets": [
             {
-                "path": "C:\\Users\\Administrator\\Pictures\\Dan & Gel Artists\\zaxwu",
+                "path": "C:\\Users\\Administrator\\Pictures\\Game CG(ai_tagged)\\Special Mission Maiden Aegis Blue",
                 "repeats": 1
             }
         ],
         "anima_caching_batch_size": 1,
-        "anima_text_cache_precision": "bfloat16",
-        "anima_vae_cache_precision": "bfloat16",
+        "anima_text_cache_precision": "float32",
+        "anima_vae_cache_precision": "float32",
         "anima_num_workers": 0,
         "anima_unconditional_dropout": false,
         "anima_unconditional_dropout_chance": 0.9,
@@ -175,7 +175,7 @@
             1152
         ],
         "anima_prediction_type": "epsilon",
-        "anima_max_train_steps": "4500",
+        "anima_max_train_steps": "4000",
         "anima_batch_size": 1,
         "anima_gradient_accumulation_steps": "1",
         "anima_mixed_precision": "bfloat16",
@@ -188,12 +188,12 @@
                 1e-08
             ],
             [
-                0.0494186,
-                6e-06
+                0.05232558,
+                9e-06
             ],
             [
-                0.9622093,
-                6e-06
+                0.95348837,
+                9e-06
             ],
             [
                 1.0,
@@ -202,35 +202,35 @@
         ],
         "anima_learning_rate": 8e-07,
         "anima_lr_graph_min": "1.0e-8",
-        "anima_lr_graph_max": "6.0e-6",
+        "anima_lr_graph_max": "9.0e-6",
         "anima_timestep_allocation": {
             "bin_size": 40,
             "counts": [
-                180,
-                180,
-                180,
-                180,
-                180,
-                180,
-                180,
-                180,
-                180,
-                180,
-                180,
-                180,
-                180,
-                180,
-                180,
-                180,
-                180,
-                180,
-                180,
-                180,
-                180,
-                180,
-                180,
-                180,
-                180
+                160,
+                160,
+                160,
+                160,
+                160,
+                160,
+                160,
+                160,
+                160,
+                160,
+                160,
+                160,
+                160,
+                160,
+                160,
+                160,
+                160,
+                160,
+                160,
+                160,
+                160,
+                160,
+                160,
+                160,
+                160
             ]
         },
         "anima_timestep_stratified_sampling": true,
@@ -295,7 +295,7 @@
         "anima_dit_exclude_targets": "llm_adapter.*",
         "anima_cache_folder_name": ".precomputed_anima_dit_cache",
         "anima_gradient_checkpointing_mode": "Full",
-        "anima_semantic_loss_enabled": false,
+        "anima_semantic_loss_enabled": true,
         "anima_vae_caching_tiled": true,
         "anima_vae_caching_tile_size": [
             96,
